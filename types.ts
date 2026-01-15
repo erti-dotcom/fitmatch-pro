@@ -64,6 +64,7 @@ export interface UserProfile {
 export interface ChatMessage {
   id: string;
   senderId: string;
+  receiverId: string; // Added to identify the recipient
   text: string;
   timestamp: number;
 }

@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { UserProfile, SportType, SkillLevel, ChatMessage, ActivityLog } from './types';
-import { MOCK_USERS, INITIAL_CHAT_MESSAGES } from './constants';
+import { MOCK_USERS } from './constants';
 import { supabase } from './lib/supabaseClient';
+import { fetchMessages, sendMessageToDb } from './services/chatService'; 
 import { MatchCard } from './components/MatchCard';
 import { Dashboard } from './components/Dashboard';
 import { AuthScreen } from './components/AuthScreen';
@@ -23,33 +24,34 @@ import {
   X,
   CheckCircle,
   Home,
-  Map,
-  Compass
+  Compass,
+  Dumbbell,
+  ArrowLeft,
+  Menu
 } from 'lucide-react';
 
 // Navigation Tabs
 enum Tab {
-  FEED = 'feed', // New Home
-  DISCOVER = 'discover', // Was Matches
-  DASHBOARD = 'dashboard', // Stats
+  FEED = 'feed', 
+  DISCOVER = 'discover', 
+  DASHBOARD = 'dashboard', 
   CHAT = 'chat',
   PROFILE = 'profile',
   AI_COACH = 'ai_coach',
-  FRIENDS = 'friends' // New
+  FRIENDS = 'friends' 
 }
 
-// Helper to generate fake activities for friends (Simulation for Feed)
+// Helper to generate fake activities for friends
 const generateMockActivities = (users: UserProfile[]): ActivityLog[] => {
     const activities: ActivityLog[] = [];
     users.forEach(u => {
-        // Randomly generate 1-3 activities per user from the last week
         const count = Math.floor(Math.random() * 3) + 1;
         for(let i=0; i<count; i++) {
             const sport = u.sports[Math.floor(Math.random() * u.sports.length)];
             const daysAgo = Math.floor(Math.random() * 5);
             const date = new Date();
             date.setDate(date.getDate() - daysAgo);
-            date.setHours(Math.random() * 12 + 8); // 8am - 8pm
+            date.setHours(Math.random() * 12 + 8);
             
             activities.push({
                 id: `mock_${u.id}_${i}`,
@@ -75,9 +77,10 @@ const App = () => {
   
   // Data
   const [users, setUsers] = useState<UserProfile[]>([]);
-  const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_CHAT_MESSAGES);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [selectedChatPartner, setSelectedChatPartner] = useState<string | null>(null);
   const [feedActivities, setFeedActivities] = useState<ActivityLog[]>([]);
+  const chatSubscriptionRef = useRef<any>(null);
   
   // Search & Filters
   const [searchTerm, setSearchTerm] = useState('');
@@ -87,8 +90,8 @@ const App = () => {
   const [showWorkoutModal, setShowWorkoutModal] = useState(false);
   const [logActivity, setLogActivity] = useState('Gym');
   const [logDuration, setLogDuration] = useState('60');
-  const [logDistance, setLogDistance] = useState(''); // New
-  const [logNotes, setLogNotes] = useState(''); // New
+  const [logDistance, setLogDistance] = useState(''); 
+  const [logNotes, setLogNotes] = useState(''); 
   const [taggedFriends, setTaggedFriends] = useState<string[]>([]);
 
   // Form Inputs (Profile Editing)
@@ -103,6 +106,7 @@ const App = () => {
   
   // Chat Input
   const [chatInput, setChatInput] = useState('');
+  const chatBottomRef = useRef<HTMLDivElement>(null);
   
   // AI Coach
   const [coachGoal, setCoachGoal] = useState('');
@@ -125,16 +129,12 @@ const App = () => {
           
         if (profile) {
             let userProfile = profile as UserProfile;
-            
-            // --- MERGE LOCAL STORAGE STATS ---
             const localStatsStr = localStorage.getItem(`fitmatch_stats_${userProfile.id}`);
             if (localStatsStr) {
                 const localStats = JSON.parse(localStatsStr);
                 userProfile = { ...userProfile, ...localStats };
             }
-
             setCurrentUser(userProfile);
-            // Pre-fill form
             setNameInput(userProfile.name);
             setAgeInput(userProfile.age.toString());
             setLocationInput(userProfile.location || '');
@@ -143,7 +143,6 @@ const App = () => {
             setAvatarUrl(userProfile.avatar);
             setLevelInput(userProfile.level || SkillLevel.BEGINNER);
             setFrequencyInput(userProfile.frequency || 3);
-            
             setActiveTab(Tab.FEED);
         }
       }
@@ -152,7 +151,6 @@ const App = () => {
 
     checkSession();
 
-    // Fetch other users & Generate Mock Feed
     const fetchUsers = async () => {
         const { data: profiles } = await supabase.from('profiles').select('*');
         let appUsers = MOCK_USERS;
@@ -160,9 +158,6 @@ const App = () => {
             appUsers = profiles as UserProfile[];
         }
         setUsers(appUsers);
-        
-        // GENERATE MOCK FEED
-        // This simulates a "Real" database of activities from friends
         const mockFeed = generateMockActivities(appUsers);
         setFeedActivities(mockFeed);
     };
@@ -170,16 +165,84 @@ const App = () => {
 
   }, []);
 
-  // --- HANDLERS ---
+  // --- CHAT SYSTEM (REAL DATABASE) ---
+  useEffect(() => {
+    if (!currentUser || !selectedChatPartner) return;
 
+    const loadMessages = async () => {
+        const msgs = await fetchMessages(currentUser.id, selectedChatPartner);
+        setMessages(msgs);
+        setTimeout(scrollToBottom, 100);
+    };
+    loadMessages();
+
+    if (chatSubscriptionRef.current) supabase.removeChannel(chatSubscriptionRef.current);
+
+    chatSubscriptionRef.current = supabase
+        .channel('public:messages')
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
+            const newMsg = payload.new;
+            if ((newMsg.sender_id === currentUser.id && newMsg.receiver_id === selectedChatPartner) ||
+                (newMsg.sender_id === selectedChatPartner && newMsg.receiver_id === currentUser.id)) {
+                
+                const formattedMsg: ChatMessage = {
+                    id: newMsg.id,
+                    senderId: newMsg.sender_id,
+                    receiverId: newMsg.receiver_id,
+                    text: newMsg.text,
+                    timestamp: new Date(newMsg.created_at).getTime()
+                };
+                setMessages(prev => [...prev, formattedMsg]);
+                setTimeout(scrollToBottom, 100);
+            }
+        })
+        .subscribe();
+
+    return () => {
+        if (chatSubscriptionRef.current) supabase.removeChannel(chatSubscriptionRef.current);
+    };
+
+  }, [selectedChatPartner, currentUser]);
+
+  const scrollToBottom = () => {
+      chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const handleSendMessage = async (textOverride?: string) => {
+    const textToSend = textOverride || chatInput;
+    if (!textToSend.trim() || !currentUser || !selectedChatPartner) return;
+
+    const tempId = Date.now().toString();
+    const optimisticMsg: ChatMessage = {
+        id: tempId,
+        senderId: currentUser.id,
+        receiverId: selectedChatPartner,
+        text: textToSend,
+        timestamp: Date.now()
+    };
+    setMessages(prev => [...prev, optimisticMsg]);
+    setChatInput('');
+    setTimeout(scrollToBottom, 50);
+
+    try {
+        await sendMessageToDb(currentUser.id, selectedChatPartner, textToSend);
+    } catch (e) {
+        console.error("Failed to send message", e);
+        alert("Nachricht konnte nicht gesendet werden.");
+    }
+  };
+
+  const handleProposeWorkout = () => {
+      handleSendMessage("🏋️ Lust auf ein gemeinsames Training diese Woche?");
+  };
+
+  // --- HANDLERS ---
   const handleLogin = (user: UserProfile) => {
-    // Check for local stats on login
     const localStatsStr = localStorage.getItem(`fitmatch_stats_${user.id}`);
     let fullUser = user;
     if (localStatsStr) {
         fullUser = { ...user, ...JSON.parse(localStatsStr) };
     }
-
     setCurrentUser(fullUser);
     setNameInput(user.name);
     setAgeInput(user.age.toString());
@@ -189,8 +252,6 @@ const App = () => {
     setAvatarUrl(user.avatar);
     setLevelInput(user.level || SkillLevel.BEGINNER);
     setFrequencyInput(user.frequency || 3);
-    
-    // Regenerate feed with logged in user context
     const mockFeed = generateMockActivities(users);
     setFeedActivities(mockFeed);
     
@@ -208,28 +269,22 @@ const App = () => {
       setIsEditingProfile(false);
   };
 
-  // --- FRIEND / FOLLOWER LOGIC ---
   const handleToggleFriend = (friendId: string) => {
       if (!currentUser) return;
-      
       const currentFriends = currentUser.friends || [];
       let newFriends;
-      
       if (currentFriends.includes(friendId)) {
           newFriends = currentFriends.filter(id => id !== friendId);
       } else {
           newFriends = [...currentFriends, friendId];
       }
-      
       const updatedUser = { ...currentUser, friends: newFriends };
       setCurrentUser(updatedUser);
       persistUserStats(updatedUser);
   };
 
-  // --- WORKOUT LOGGING LOGIC ---
   const handleLogWorkout = () => {
       if (!currentUser) return;
-
       const newActivity: ActivityLog = {
           id: Date.now().toString(),
           userId: currentUser.id,
@@ -240,26 +295,20 @@ const App = () => {
           notes: logNotes,
           distance: logDistance ? parseFloat(logDistance) : undefined
       };
-
-      // Calculate Streak
       let newStreak = (currentUser.streak || 0);
       const lastDate = currentUser.lastWorkout ? new Date(currentUser.lastWorkout) : null;
       const today = new Date();
-      
       if (!lastDate || lastDate.getDate() !== today.getDate()) {
           newStreak += 1;
       }
-
       const updatedUser: UserProfile = {
           ...currentUser,
           streak: newStreak,
           lastWorkout: today.toISOString(),
           activityHistory: [newActivity, ...(currentUser.activityHistory || [])]
       };
-
       setCurrentUser(updatedUser);
       persistUserStats(updatedUser);
-
       setShowWorkoutModal(false);
       setTaggedFriends([]);
       setLogNotes('');
@@ -285,7 +334,6 @@ const App = () => {
       }
   };
 
-  // --- PROFILE LOGIC ---
   const handleAvatarUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     try {
       if (!event.target.files || event.target.files.length === 0) return;
@@ -293,16 +341,13 @@ const App = () => {
       const fileExt = file.name.split('.').pop();
       const fileName = `${Math.random()}.${fileExt}`;
       const filePath = `${fileName}`;
-
       const { error: uploadError } = await supabase.storage.from('avatars').upload(filePath, file);
-
       if (uploadError) {
         const reader = new FileReader();
         reader.onload = (e) => { if(e.target?.result) setAvatarUrl(e.target.result as string); };
         reader.readAsDataURL(file);
         return;
       }
-
       const { data } = supabase.storage.from('avatars').getPublicUrl(filePath);
       if (data) setAvatarUrl(data.publicUrl);
     } catch (error) {
@@ -312,7 +357,6 @@ const App = () => {
 
   const handleSaveProfile = async () => {
     if (!currentUser) return;
-    
     const updatedUser: UserProfile = {
       ...currentUser,
       name: nameInput,
@@ -324,7 +368,6 @@ const App = () => {
       frequency: frequencyInput,
       avatar: avatarUrl || currentUser.avatar 
     };
-
     const { error } = await supabase.from('profiles').update({
             name: updatedUser.name,
             age: updatedUser.age,
@@ -335,8 +378,6 @@ const App = () => {
             level: updatedUser.level,
             frequency: updatedUser.frequency
         }).eq('id', currentUser.id);
-
-    // Always update local state immediately
     setCurrentUser(updatedUser);
     setIsEditingProfile(false);
   };
@@ -349,22 +390,9 @@ const App = () => {
     }
   };
 
-  // --- OTHERS ---
   const handleStartChat = (id: string) => {
     setSelectedChatPartner(id);
     setActiveTab(Tab.CHAT);
-  };
-
-  const handleSendMessage = () => {
-    if (!chatInput.trim() || !currentUser || !selectedChatPartner) return;
-    const newMsg: ChatMessage = {
-      id: Date.now().toString(),
-      senderId: currentUser.id,
-      text: chatInput,
-      timestamp: Date.now()
-    };
-    setMessages([...messages, newMsg]);
-    setChatInput('');
   };
   
   const handleGeneratePlan = async () => {
@@ -382,7 +410,6 @@ const App = () => {
       return matchesSearch && matchesSport;
   });
 
-  // Calculate Feed
   const currentFeed = currentUser 
     ? [...(currentUser.activityHistory || []), ...feedActivities.filter(a => currentUser.friends?.includes(a.userId))] 
     : [];
@@ -394,9 +421,9 @@ const App = () => {
   // EDIT PROFILE MODAL
   if (isEditingProfile) {
     return (
-      <div className="fixed inset-0 z-50 bg-gray-900 overflow-y-auto">
-        <div className="flex items-center justify-center min-h-screen p-4">
-        <div className="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-md border border-gray-700 animate-in fade-in zoom-in duration-300 my-8">
+      <div className="fixed inset-0 z-[60] bg-gray-900 overflow-y-auto">
+        <div className="flex items-center justify-center min-h-screen p-4 pb-24">
+        <div className="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-md border border-gray-700 animate-in fade-in zoom-in duration-300">
           <div className="flex justify-center mb-6 relative group">
             <div className="relative cursor-pointer">
                 <img src={avatarUrl || currentUser.avatar} alt="Avatar" className="w-24 h-24 rounded-full object-cover border-4 border-gray-700 group-hover:border-blue-500 transition-all"/>
@@ -448,12 +475,12 @@ const App = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 flex text-gray-100 font-sans relative">
+    <div className="h-screen bg-gray-900 flex flex-col md:flex-row text-gray-100 font-sans relative overflow-hidden">
       
       {/* WORKOUT MODAL OVERLAY */}
       {showWorkoutModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200 p-4">
-              <div className="bg-gray-800 p-6 rounded-2xl w-full max-w-sm border border-gray-700 shadow-2xl scale-100">
+              <div className="bg-gray-800 p-6 rounded-2xl w-full max-w-sm border border-gray-700 shadow-2xl scale-100 mb-12 md:mb-0">
                   <div className="flex justify-between items-center mb-4">
                       <h3 className="text-xl font-bold text-white flex items-center gap-2"><Activity className="text-blue-500"/> Workout Loggen</h3>
                       <button onClick={() => setShowWorkoutModal(false)} className="text-gray-400 hover:text-white"><X size={24}/></button>
@@ -462,47 +489,20 @@ const App = () => {
                   <div className="space-y-4">
                       <div>
                           <label className="block text-sm text-gray-400 mb-1">Aktivität</label>
-                          <select 
-                            value={logActivity}
-                            onChange={(e) => setLogActivity(e.target.value)}
-                            className="w-full bg-gray-700 border border-gray-600 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500"
-                          >
+                          <select value={logActivity} onChange={(e) => setLogActivity(e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-lg p-3 text-white">
                               {Object.values(SportType).map(s => <option key={s} value={s}>{s}</option>)}
                           </select>
                       </div>
                       <div className="grid grid-cols-2 gap-4">
-                          <div>
-                              <label className="block text-sm text-gray-400 mb-1">Dauer (Min)</label>
-                              <input 
-                                type="number" 
-                                value={logDuration}
-                                onChange={(e) => setLogDuration(e.target.value)}
-                                className="w-full bg-gray-700 border border-gray-600 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500"
-                              />
-                          </div>
-                          <div>
-                              <label className="block text-sm text-gray-400 mb-1">Distanz (km)</label>
-                              <input 
-                                type="number" 
-                                value={logDistance}
-                                onChange={(e) => setLogDistance(e.target.value)}
-                                placeholder="Optional"
-                                className="w-full bg-gray-700 border border-gray-600 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500"
-                              />
-                          </div>
+                          <div><label className="block text-sm text-gray-400 mb-1">Dauer (Min)</label><input type="number" value={logDuration} onChange={(e) => setLogDuration(e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-lg p-3 text-white" /></div>
+                          <div><label className="block text-sm text-gray-400 mb-1">Distanz (km)</label><input type="number" value={logDistance} onChange={(e) => setLogDistance(e.target.value)} placeholder="Optional" className="w-full bg-gray-700 border border-gray-600 rounded-lg p-3 text-white" /></div>
                       </div>
                       
                       <div>
                           <label className="block text-sm text-gray-400 mb-1">Notiz / Caption</label>
-                          <textarea
-                             value={logNotes}
-                             onChange={(e) => setLogNotes(e.target.value)}
-                             placeholder="Wie war's? @friends"
-                             className="w-full bg-gray-700 border border-gray-600 rounded-lg p-3 text-white h-20 text-sm"
-                          />
+                          <textarea value={logNotes} onChange={(e) => setLogNotes(e.target.value)} placeholder="Wie war's? @friends" className="w-full bg-gray-700 border border-gray-600 rounded-lg p-3 text-white h-20 text-sm" />
                       </div>
                       
-                      {/* Tag Friends */}
                       <div>
                           <label className="block text-sm text-gray-400 mb-2">Freunde markieren</label>
                           <div className="max-h-32 overflow-y-auto border border-gray-700 rounded-lg p-2 space-y-2">
@@ -521,16 +521,11 @@ const App = () => {
                                          </div>
                                      )
                                  })
-                             ) : (
-                                 <p className="text-xs text-gray-500 text-center py-2">Füge erst Freunde hinzu, um sie zu markieren.</p>
-                             )}
+                             ) : <p className="text-xs text-gray-500 text-center py-2">Füge erst Freunde hinzu, um sie zu markieren.</p>}
                           </div>
                       </div>
 
-                      <button 
-                        onClick={handleLogWorkout}
-                        className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 mt-2"
-                      >
+                      <button onClick={handleLogWorkout} className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 mt-2">
                           <CheckCircle size={18}/> Workout Teilen
                       </button>
                   </div>
@@ -538,45 +533,54 @@ const App = () => {
           </div>
       )}
 
-      {/* SIDEBAR */}
-      <nav className="w-20 md:w-64 bg-gray-800 border-r border-gray-700 flex flex-col items-center md:items-start py-6 flex-shrink-0 sticky top-0 h-screen z-10">
+      {/* DESKTOP SIDEBAR */}
+      <nav className="hidden md:flex w-64 bg-gray-800 border-r border-gray-700 flex-col py-6 flex-shrink-0">
         <div className="mb-8 px-4 flex items-center gap-3">
           <div className="bg-gradient-to-br from-blue-600 to-blue-800 p-2 rounded-lg shadow-lg shadow-blue-900/50"><Activity className="text-white" size={24} /></div>
-          <span className="hidden md:block text-xl font-black tracking-tighter italic">FitGram</span>
+          <span className="text-xl font-black tracking-tighter italic">FitGram</span>
         </div>
         <div className="space-y-1 w-full px-2">
           <NavButton active={activeTab === Tab.FEED} onClick={() => setActiveTab(Tab.FEED)} icon={<Home size={22} />} label="Feed" />
           <NavButton active={activeTab === Tab.DISCOVER} onClick={() => setActiveTab(Tab.DISCOVER)} icon={<Compass size={22} />} label="Entdecken" />
           <NavButton active={activeTab === Tab.FRIENDS} onClick={() => setActiveTab(Tab.FRIENDS)} icon={<Users size={22} />} label="Community" />
-          <NavButton active={activeTab === Tab.DASHBOARD} onClick={() => setActiveTab(Tab.DASHBOARD)} icon={<Activity size={22} />} label="Statistik" />
+          <NavButton active={activeTab === Tab.DASHBOARD} onClick={() => setActiveTab(Tab.DASHBOARD)} icon={<Activity size={22} />} label="Dashboard" />
           <NavButton active={activeTab === Tab.CHAT} onClick={() => setActiveTab(Tab.CHAT)} icon={<MessageSquare size={22} />} label="Nachrichten" />
           <NavButton active={activeTab === Tab.AI_COACH} onClick={() => setActiveTab(Tab.AI_COACH)} icon={<Sparkles size={22} />} label="AI Coach" />
           <NavButton active={activeTab === Tab.PROFILE} onClick={() => setActiveTab(Tab.PROFILE)} icon={<UserCircle size={22} />} label="Mein Profil" />
         </div>
         <div className="mt-auto px-4 w-full space-y-4">
-             <button 
-                onClick={() => setShowWorkoutModal(true)}
-                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20"
-             >
-                <CheckCircle size={20}/> <span className="hidden md:inline">Workout Loggen</span>
+             <button onClick={() => setShowWorkoutModal(true)} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20">
+                <CheckCircle size={20}/> Workout Loggen
              </button>
-
-            <div className="hidden md:flex items-center gap-3 p-3 bg-gray-700/50 rounded-xl cursor-pointer hover:bg-gray-700" onClick={() => setActiveTab(Tab.PROFILE)}>
+            <div className="flex items-center gap-3 p-3 bg-gray-700/50 rounded-xl cursor-pointer hover:bg-gray-700" onClick={() => setActiveTab(Tab.PROFILE)}>
                 <img src={currentUser.avatar} alt="Me" className="w-8 h-8 rounded-full bg-gray-600 object-cover" />
                 <div className="overflow-hidden"><p className="text-sm font-bold truncate">{currentUser.name}</p></div>
             </div>
-            <button onClick={handleLogout} className="w-full flex items-center gap-3 px-4 py-2 rounded-xl text-red-400 hover:bg-red-900/20 transition-colors"><LogOut size={20} /><span className="hidden md:block font-medium">Ausloggen</span></button>
+            <button onClick={handleLogout} className="w-full flex items-center gap-3 px-4 py-2 rounded-xl text-red-400 hover:bg-red-900/20 transition-colors"><LogOut size={20} /><span className="font-medium">Ausloggen</span></button>
         </div>
       </nav>
 
-      {/* MAIN CONTENT */}
-      <main className="flex-1 p-0 md:p-8 overflow-y-auto">
-        <header className="p-4 md:p-0 md:mb-8 flex justify-between items-center sticky top-0 bg-gray-900/90 backdrop-blur-md z-10 md:static md:bg-transparent">
+      {/* MOBILE HEADER (Visible only on mobile) */}
+      <header className="md:hidden bg-gray-900/90 backdrop-blur-md border-b border-gray-800 p-4 sticky top-0 z-40 flex justify-between items-center">
+          <div className="flex items-center gap-2">
+              <div className="bg-gradient-to-br from-blue-600 to-blue-800 p-1.5 rounded shadow shadow-blue-900/50"><Activity className="text-white" size={18} /></div>
+              <span className="text-lg font-black tracking-tighter italic">FitGram</span>
+          </div>
+          <button onClick={() => setShowWorkoutModal(true)} className="bg-blue-600 text-white p-2 rounded-full shadow-lg shadow-blue-900/30">
+              <CheckCircle size={20} />
+          </button>
+      </header>
+
+      {/* MAIN CONTENT AREA */}
+      <main className="flex-1 overflow-y-auto relative bg-gray-900 scroll-smooth">
+        
+        {/* DESKTOP HEADER */}
+        <header className="hidden md:flex p-8 pb-4 justify-between items-center bg-gray-900 sticky top-0 z-30">
             <h2 className="text-2xl font-bold text-white capitalize">{activeTab === Tab.FEED ? 'Dein Feed' : activeTab.replace('_', ' ')}</h2>
             {activeTab === Tab.DISCOVER && (
-                <div className="flex gap-2 w-full md:w-auto ml-4">
-                     <div className="relative flex-1 md:flex-initial">
-                        <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Suchen..." className="bg-gray-800 border border-gray-700 rounded-full py-2 pl-10 pr-4 text-sm text-gray-300 w-full md:w-64" />
+                <div className="flex gap-2">
+                     <div className="relative">
+                        <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Suchen..." className="bg-gray-800 border border-gray-700 rounded-full py-2 pl-10 pr-4 text-sm text-gray-300 w-64" />
                         <Search className="absolute left-3 top-2.5 text-gray-500" size={16} />
                      </div>
                      <div className="relative">
@@ -590,7 +594,27 @@ const App = () => {
             )}
         </header>
 
-        <div className="px-4 md:px-0 pb-20 md:pb-0">
+        {/* MOBILE SUB-HEADER FOR SEARCH (Only on Discover) */}
+        {activeTab === Tab.DISCOVER && (
+            <div className="md:hidden p-4 sticky top-0 bg-gray-900 z-30 space-y-3 border-b border-gray-800">
+                <h2 className="text-xl font-bold text-white">Entdecken</h2>
+                <div className="flex gap-2">
+                     <div className="relative flex-1">
+                        <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Suchen..." className="w-full bg-gray-800 border border-gray-700 rounded-lg py-2 pl-9 pr-3 text-sm text-gray-300" />
+                        <Search className="absolute left-3 top-2.5 text-gray-500" size={16} />
+                     </div>
+                     <div className="relative">
+                         <select value={filterSport} onChange={(e) => setFilterSport(e.target.value as SportType | 'ALL')} className="bg-gray-800 border border-gray-700 rounded-lg py-2 pl-3 pr-8 text-sm text-gray-300 appearance-none">
+                             <option value="ALL">Alle</option>
+                             {Object.values(SportType).map(s => <option key={s} value={s}>{s}</option>)}
+                         </select>
+                         <Filter className="absolute right-2 top-2.5 text-gray-500 pointer-events-none" size={14} />
+                     </div>
+                </div>
+            </div>
+        )}
+
+        <div className="p-4 md:p-8 md:pt-0 pb-24 md:pb-8">
             {activeTab === Tab.FEED && (
                 <SocialFeed currentUser={currentUser} activities={currentFeed} users={users} />
             )}
@@ -618,7 +642,6 @@ const App = () => {
                 />
             )}
 
-            {/* MATCHES LIST */}
             {activeTab === Tab.DISCOVER && (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in zoom-in duration-300">
                 {filteredUsers.length > 0 ? (
@@ -638,60 +661,91 @@ const App = () => {
               </div>
             )}
 
-            {/* CHAT TAB */}
             {activeTab === Tab.CHAT && (
-              <div className="bg-gray-800 rounded-2xl h-[calc(100vh-160px)] flex border border-gray-700 overflow-hidden shadow-2xl">
-                 <div className="w-1/3 border-r border-gray-700 bg-gray-800/50 flex flex-col">
+              <div className="bg-gray-800 md:rounded-2xl h-[calc(100vh-140px)] md:h-[calc(100vh-160px)] flex flex-col md:flex-row border border-gray-700 overflow-hidden shadow-2xl -mx-4 md:mx-0 -mt-4 md:mt-0 rounded-none">
+                 {/* CHAT LIST - Hidden on mobile if chat is selected */}
+                 <div className={`${selectedChatPartner ? 'hidden md:flex' : 'flex'} w-full md:w-1/3 border-r border-gray-700 bg-gray-800/50 flex-col h-full`}>
                      <div className="p-4 border-b border-gray-700 font-bold text-gray-400 text-sm">CHATS</div>
                      <div className="overflow-y-auto flex-1">
                         {users.filter(u => u.id !== currentUser?.id).map(u => (
-                            <div key={u.id} onClick={() => setSelectedChatPartner(u.id)} className={`p-4 flex items-center gap-3 cursor-pointer hover:bg-gray-700/50 ${selectedChatPartner === u.id ? 'bg-blue-900/20 border-r-2 border-blue-500' : ''}`}>
-                                <img src={u.avatar} className="w-10 h-10 rounded-full object-cover" />
-                                <div><h4 className="font-bold text-gray-200">{u.name}</h4><p className="text-xs text-gray-500 truncate">...</p></div>
+                            <div key={u.id} onClick={() => setSelectedChatPartner(u.id)} className={`p-4 flex items-center gap-3 cursor-pointer hover:bg-gray-700/50 border-b border-gray-700/30 ${selectedChatPartner === u.id ? 'bg-blue-900/20 border-r-2 border-r-blue-500' : ''}`}>
+                                <img src={u.avatar} className="w-12 h-12 rounded-full object-cover" />
+                                <div className="min-w-0">
+                                    <h4 className="font-bold text-gray-200 truncate">{u.name}</h4>
+                                    <p className="text-xs text-gray-500 truncate">Klicke zum Chatten</p>
+                                </div>
                             </div>
                         ))}
                      </div>
                  </div>
-                 <div className="flex-1 flex flex-col bg-gray-900/50">
+
+                 {/* CHAT WINDOW - Hidden on mobile if NO chat is selected */}
+                 <div className={`${selectedChatPartner ? 'flex' : 'hidden md:flex'} w-full md:flex-1 flex-col bg-gray-900/50 h-full`}>
                      {selectedChatPartner ? (
                         <>
-                             <div className="p-4 border-b border-gray-700"><h3 className="font-bold text-lg text-white">{users.find(u => u.id === selectedChatPartner)?.name}</h3></div>
-                             <div className="flex-1 p-4 overflow-y-auto space-y-4">
-                                {messages.filter(m => (m.senderId === currentUser.id && m.senderId === selectedChatPartner) || (m.senderId === selectedChatPartner) || (m.senderId === currentUser.id && selectedChatPartner)).map(msg => (
+                             <div className="p-3 md:p-4 border-b border-gray-700 flex justify-between items-center bg-gray-800 md:bg-transparent">
+                                 <div className="flex items-center gap-3">
+                                     <button onClick={() => setSelectedChatPartner(null)} className="md:hidden text-gray-400 hover:text-white"><ArrowLeft /></button>
+                                     <img src={users.find(u => u.id === selectedChatPartner)?.avatar} className="w-8 h-8 rounded-full md:hidden" />
+                                     <h3 className="font-bold text-lg text-white truncate max-w-[150px] md:max-w-none">{users.find(u => u.id === selectedChatPartner)?.name}</h3>
+                                 </div>
+                                 <button onClick={handleProposeWorkout} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1 transition-colors whitespace-nowrap">
+                                     <Dumbbell size={14} /> <span className="hidden md:inline">Training anfragen</span><span className="md:hidden">Match</span>
+                                 </button>
+                             </div>
+                             <div className="flex-1 p-4 overflow-y-auto space-y-4 bg-gray-900/50">
+                                {messages.map(msg => (
                                     <div key={msg.id} className={`flex ${msg.senderId === currentUser.id ? 'justify-end' : 'justify-start'}`}>
-                                        <div className={`max-w-[70%] p-3 rounded-2xl text-sm ${msg.senderId === currentUser.id ? 'bg-blue-600 text-white rounded-br-none' : 'bg-gray-700 text-gray-200 rounded-bl-none'}`}>{msg.text}</div>
+                                        <div className={`max-w-[75%] p-3 rounded-2xl text-sm ${msg.senderId === currentUser.id ? 'bg-blue-600 text-white rounded-br-none' : 'bg-gray-700 text-gray-200 rounded-bl-none'}`}>{msg.text}</div>
                                     </div>
                                 ))}
+                                <div ref={chatBottomRef} />
                              </div>
-                             <div className="p-4 bg-gray-800 border-t border-gray-700 flex gap-2">
-                                 <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} className="flex-1 bg-gray-700 rounded-full px-4 py-2 text-white" onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} />
-                                 <button onClick={handleSendMessage} className="bg-blue-600 p-2 rounded-full hover:bg-blue-500"><Send size={20} className="text-white" /></button>
+                             <div className="p-3 md:p-4 bg-gray-800 border-t border-gray-700 flex gap-2 safe-pb">
+                                 <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Nachricht..." className="flex-1 bg-gray-700 rounded-full px-4 py-2 text-white text-sm" onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} />
+                                 <button onClick={() => handleSendMessage()} className="bg-blue-600 p-2 rounded-full hover:bg-blue-500 shrink-0"><Send size={18} className="text-white" /></button>
                              </div>
                         </>
-                     ) : <div className="flex-1 flex items-center justify-center text-gray-500">Wähle einen Chat</div>}
+                     ) : <div className="flex-1 flex items-center justify-center text-gray-500 text-center p-8">Wähle einen Chat aus der Liste<br/>um zu starten.</div>}
                  </div>
               </div>
             )}
 
-            {/* AI COACH TAB */}
             {activeTab === Tab.AI_COACH && (
-                <div className="max-w-2xl mx-auto bg-gray-800 rounded-2xl p-8 border border-gray-700 shadow-xl">
+                <div className="max-w-2xl mx-auto bg-gray-800 rounded-2xl p-6 md:p-8 border border-gray-700 shadow-xl">
                      <div className="text-center mb-8"><Sparkles size={32} className="text-purple-400 mx-auto mb-4" /><h2 className="text-2xl font-bold text-white mb-2">AI Coach</h2></div>
                      <div className="space-y-4">
-                         <input type="text" value={coachGoal} onChange={(e) => setCoachGoal(e.target.value)} placeholder="Ziel eingeben..." className="w-full bg-gray-700 border border-gray-600 rounded-xl p-4 text-white" />
-                         <button onClick={handleGeneratePlan} disabled={coachLoading || !coachGoal} className="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 rounded-xl flex justify-center items-center gap-2">{coachLoading ? <Activity className="animate-spin" /> : 'Generieren'}</button>
+                         <input type="text" value={coachGoal} onChange={(e) => setCoachGoal(e.target.value)} placeholder="Was ist dein Ziel? (z.B. Marathon unter 4h)" className="w-full bg-gray-700 border border-gray-600 rounded-xl p-4 text-white" />
+                         <button onClick={handleGeneratePlan} disabled={coachLoading || !coachGoal} className="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 rounded-xl flex justify-center items-center gap-2">{coachLoading ? <Activity className="animate-spin" /> : 'Plan erstellen'}</button>
                      </div>
-                     {coachPlan && <div className="mt-8 p-6 bg-gray-900 rounded-xl border border-gray-700 prose prose-invert max-w-none text-gray-300 whitespace-pre-line">{coachPlan}</div>}
+                     {coachPlan && <div className="mt-8 p-6 bg-gray-900 rounded-xl border border-gray-700 prose prose-invert max-w-none text-gray-300 whitespace-pre-line text-sm md:text-base">{coachPlan}</div>}
                 </div>
             )}
         </div>
       </main>
+
+      {/* MOBILE BOTTOM NAV */}
+      <div className="md:hidden fixed bottom-0 left-0 w-full bg-gray-800 border-t border-gray-700 flex justify-around items-center p-2 pb-safe z-50">
+           <MobileNavIcon active={activeTab === Tab.FEED} onClick={() => setActiveTab(Tab.FEED)} icon={<Home size={24} />} label="Feed" />
+           <MobileNavIcon active={activeTab === Tab.DISCOVER} onClick={() => setActiveTab(Tab.DISCOVER)} icon={<Compass size={24} />} label="Suche" />
+           <MobileNavIcon active={activeTab === Tab.DASHBOARD} onClick={() => setActiveTab(Tab.DASHBOARD)} icon={<Activity size={24} />} label="Stats" />
+           <MobileNavIcon active={activeTab === Tab.CHAT} onClick={() => setActiveTab(Tab.CHAT)} icon={<MessageSquare size={24} />} label="Chats" />
+           <MobileNavIcon active={activeTab === Tab.PROFILE} onClick={() => setActiveTab(Tab.PROFILE)} icon={<UserCircle size={24} />} label="Profil" />
+      </div>
+
     </div>
   );
 };
 
 const NavButton = ({ active, onClick, icon, label }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string }) => (
-    <button onClick={onClick} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${active ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>{icon}<span className="hidden md:block font-medium">{label}</span></button>
+    <button onClick={onClick} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${active ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>{icon}<span className="font-medium">{label}</span></button>
+);
+
+const MobileNavIcon = ({ active, onClick, icon, label }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string }) => (
+    <button onClick={onClick} className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors ${active ? 'text-blue-500' : 'text-gray-500'}`}>
+        {icon}
+        <span className="text-[10px] font-bold">{label}</span>
+    </button>
 );
 
 export default App;

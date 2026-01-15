@@ -55,6 +55,7 @@ export const INITIAL_CHAT_MESSAGES = [
   {
     id: 'm1',
     senderId: 'u2',
+    receiverId: 'me', // Will be ignored or handled if logged in user has different ID
     text: 'Hey! Lust mal zusammen für Hyrox zu trainieren?',
     timestamp: Date.now() - 100000,
   }
