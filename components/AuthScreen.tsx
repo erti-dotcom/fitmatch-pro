@@ -22,7 +22,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
 
     try {
       if (isLogin) {
-        // --- LOGIN MIT SUPABASE ---
+        // --- LOGIN ---
         const { data, error: authError } = await supabase.auth.signInWithPassword({
           email,
           password,
@@ -30,7 +30,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
 
         if (authError) throw authError;
 
-        // Profil laden
         if (data.user) {
           const { data: profile, error: profileError } = await supabase
             .from('profiles')
@@ -39,15 +38,15 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
             .single();
 
           if (profileError) {
-             // Fallback falls User existiert aber kein Profil hat (sollte nicht passieren)
-             setError('Profil konnte nicht geladen werden.');
+             console.error("Profil Fehler:", profileError);
+             throw new Error(`Login erfolgreich, aber Profil nicht gefunden. Eventuell wurde die Datenbank zurückgesetzt? Bitte neu registrieren.`);
           } else {
              onLogin(profile as UserProfile);
           }
         }
 
       } else {
-        // --- REGISTRIERUNG MIT SUPABASE ---
+        // --- REGISTRIERUNG ---
         if (!name || !email || !password) {
           setError('Bitte alle Felder ausfüllen.');
           setLoading(false);
@@ -63,7 +62,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
         if (signUpError) throw signUpError;
 
         if (data.user) {
-          // 2. Profil Eintrag erstellen
+          // 2. Profil Eintrag erstellen (Upsert statt Insert für Stabilität)
           const newUserProfile: UserProfile = {
             id: data.user.id,
             email: email,
@@ -79,11 +78,18 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
 
           const { error: profileError } = await supabase
             .from('profiles')
-            .insert([newUserProfile]);
+            .upsert([newUserProfile]); // Upsert repariert auch halb-kaputte Accounts
 
           if (profileError) {
-             console.error(profileError);
-             throw new Error("Fehler beim Erstellen des Profils.");
+             console.error("DB Error:", profileError);
+             
+             if (profileError.code === "42P01") {
+                 throw new Error("Fehler: Datenbank-Tabelle fehlt. Bitte SQL Script in Supabase ausführen!");
+             }
+             if (profileError.message.includes("row-level security")) {
+                 throw new Error("Fehler: Berechtigung verweigert. WICHTIG: Hast du in Supabase unter Authentication -> Providers -> Email 'Confirm Email' deaktiviert?");
+             }
+             throw new Error(`Profil konnte nicht gespeichert werden: ${profileError.message}`);
           }
 
           onLogin(newUserProfile);
@@ -151,7 +157,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
             </div>
 
             {error && (
-              <div className="bg-red-900/30 border border-red-800 text-red-200 text-sm p-3 rounded-lg text-center">
+              <div className="bg-red-900/30 border border-red-800 text-red-200 text-sm p-3 rounded-lg text-center break-words">
                 {error}
               </div>
             )}
