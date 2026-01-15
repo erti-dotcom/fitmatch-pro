@@ -9,15 +9,18 @@ import {
     ArrowRight, 
     MessageCircle,
     Dumbbell,
-    Calendar
+    Calendar,
+    History,
+    Users
 } from 'lucide-react';
 
 interface DashboardProps {
     user: UserProfile;
     matches: UserProfile[];
+    onOpenLogModal: () => void;
+    onSwitchTab: (tab: any) => void;
 }
 
-// Statische Tipps, die sich stündlich ändern
 const HOURLY_TIPS = [
     { title: "Morgen-Routine", text: "Trinke direkt nach dem Aufstehen 500ml Wasser mit einer Prise Salz für optimale Hydration vor dem Sport.", category: "Nutrition" },
     { title: "Pre-Workout Focus", text: "Visualisiere deine Trainingseinheit 5 Minuten bevor du startest. Das steigert die neuromuskuläre Leistung.", category: "Mindset" },
@@ -28,30 +31,24 @@ const HOURLY_TIPS = [
     { title: "Lauftechnik", text: "Achte auf deine Schrittfrequenz. 170-180 Schritte pro Minute gelten als effizient und gelenkschonend.", category: "Training" },
 ];
 
-export const Dashboard: React.FC<DashboardProps> = ({ user, matches }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ user, matches, onOpenLogModal, onSwitchTab }) => {
     const [currentTip, setCurrentTip] = useState(HOURLY_TIPS[0]);
     const [spotlightMatch, setSpotlightMatch] = useState<UserProfile | null>(null);
 
     useEffect(() => {
-        // Tipp basierend auf der Stunde auswählen
         const hour = new Date().getHours();
         const tipIndex = hour % HOURLY_TIPS.length;
         setCurrentTip(HOURLY_TIPS[tipIndex]);
 
-        // Ein zufälliges "Spotlight Match" auswählen, falls Matches vorhanden sind
         if (matches.length > 0) {
             const randomMatch = matches[Math.floor(Math.random() * matches.length)];
             setSpotlightMatch(randomMatch);
         }
     }, [matches]);
 
-    // Generiere ein paar Fake-Aktivitäten basierend auf den Matches
-    const recentActivities = matches.slice(0, 3).map((m, i) => ({
-        user: m.name,
-        action: i === 0 ? "hat ein 10km Lauf beendet" : i === 1 ? "sucht einen Partner für Hyrox" : "hat sein Profil aktualisiert",
-        time: `${i * 15 + 2} Min.`
-    }));
-
+    // Use Real History if available, otherwise fallback
+    const myHistory = user.activityHistory || [];
+    
     const getGreeting = () => {
         const hour = new Date().getHours();
         if (hour < 12) return "Guten Morgen";
@@ -73,8 +70,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, matches }) => {
                     </p>
                 </div>
                 <div className="bg-gray-800 px-4 py-2 rounded-full border border-gray-700 flex items-center gap-2 shadow-sm">
-                    <Flame size={18} className="text-orange-500" fill="currentColor" />
-                    <span className="font-bold text-white">3 Tage Streak</span>
+                    <Flame size={18} className={user.streak && user.streak > 0 ? "text-orange-500 animate-pulse" : "text-gray-600"} fill="currentColor" />
+                    <span className="font-bold text-white">{user.streak || 0} Tage Streak</span>
                 </div>
             </div>
 
@@ -101,15 +98,42 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, matches }) => {
                 {/* LEFT COLUMN (2/3) */}
                 <div className="lg:col-span-2 space-y-6">
                     
+                    {/* QUICK STATS & ACTIONS ROW */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div 
+                            onClick={onOpenLogModal}
+                            className="bg-gray-800 p-5 rounded-2xl border border-gray-700 hover:border-blue-500 cursor-pointer transition-all group shadow-md"
+                        >
+                            <div className="flex justify-between items-start mb-2">
+                                <div className="p-2 bg-blue-900/30 rounded-lg group-hover:bg-blue-600 transition-colors">
+                                    <Dumbbell className="text-blue-400 group-hover:text-white" size={24} />
+                                </div>
+                                <ArrowRight className="text-gray-600 group-hover:text-blue-400" size={18} />
+                            </div>
+                            <h3 className="font-bold text-white">Workout Loggen</h3>
+                            <p className="text-xs text-gray-400 mt-1">Tracke deine Aktivität für heute</p>
+                        </div>
+
+                        <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-md">
+                            <div className="flex justify-between items-start mb-2">
+                                <div className="p-2 bg-yellow-900/30 rounded-lg">
+                                    <Trophy className="text-yellow-400" size={24} />
+                                </div>
+                            </div>
+                            <h3 className="font-bold text-white">{user.level}</h3>
+                            <p className="text-xs text-gray-400 mt-1">Aktuelles Level</p>
+                        </div>
+                    </div>
+
                     {/* SPOTLIGHT MATCH */}
-                    {spotlightMatch ? (
+                    {spotlightMatch && (
                         <div className="bg-gray-800 rounded-2xl p-6 border border-gray-700 shadow-md">
                             <div className="flex justify-between items-center mb-4">
                                 <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                                    <Trophy size={18} className="text-yellow-500" /> 
-                                    Match des Tages
+                                    <Users size={18} className="text-blue-400" /> 
+                                    Vorschlag für dich
                                 </h3>
-                                <span className="text-xs text-gray-500 bg-gray-900 px-2 py-1 rounded">98% Kompatibilität</span>
+                                <span className="text-xs text-gray-500 bg-gray-900 px-2 py-1 rounded">98% Match</span>
                             </div>
                             
                             <div className="flex items-center gap-4">
@@ -122,78 +146,56 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, matches }) => {
                                     <h4 className="font-bold text-xl text-white">{spotlightMatch.name}</h4>
                                     <p className="text-gray-400 text-sm mb-2">{spotlightMatch.location} • {spotlightMatch.sports[0]}</p>
                                     <div className="flex gap-2">
-                                        <button className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-4 py-2 rounded-lg transition-colors flex items-center gap-2">
+                                        <button 
+                                            onClick={() => onSwitchTab('chat')} 
+                                            className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
+                                        >
                                             <MessageCircle size={14} /> Anschreiben
-                                        </button>
-                                        <button className="bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-bold px-4 py-2 rounded-lg transition-colors">
-                                            Profil
                                         </button>
                                     </div>
                                 </div>
                             </div>
                         </div>
-                    ) : (
-                        <div className="bg-gray-800 rounded-2xl p-6 border border-gray-700 flex flex-col items-center justify-center text-center h-48">
-                            <p className="text-gray-400">Noch keine Matches gefunden.</p>
-                            <button className="text-blue-400 text-sm mt-2">Suche starten</button>
-                        </div>
                     )}
-
-                    {/* QUICK STATS */}
-                    <div className="grid grid-cols-2 gap-4">
-                        <div className="bg-gray-800 p-4 rounded-xl border border-gray-700">
-                            <p className="text-gray-500 text-xs uppercase font-bold mb-1">Dein Level</p>
-                            <div className="flex items-end gap-2">
-                                <span className="text-2xl font-bold text-white">{user.level}</span>
-                            </div>
-                        </div>
-                        <div className="bg-gray-800 p-4 rounded-xl border border-gray-700">
-                            <p className="text-gray-500 text-xs uppercase font-bold mb-1">Frequenz</p>
-                            <div className="flex items-end gap-2">
-                                <span className="text-2xl font-bold text-blue-400">{user.frequency}x</span>
-                                <span className="text-xs text-gray-400 mb-1">/ Woche</span>
-                            </div>
-                        </div>
-                    </div>
                 </div>
 
                 {/* RIGHT COLUMN (1/3) */}
                 <div className="space-y-6">
-                    {/* COMMUNITY PULSE */}
-                    <div className="bg-gray-800 rounded-2xl p-5 border border-gray-700">
+                    {/* ACTIVITY HISTORY */}
+                    <div className="bg-gray-800 rounded-2xl p-5 border border-gray-700 h-full">
                         <h3 className="text-sm font-bold text-gray-400 uppercase mb-4 flex items-center gap-2">
-                            <TrendingUp size={16} /> Community Pulse
+                            <History size={16} /> Deine Aktivitäten
                         </h3>
-                        <div className="space-y-4">
-                            {recentActivities.map((activity, idx) => (
-                                <div key={idx} className="flex gap-3 items-start border-l-2 border-gray-700 pl-3 pb-1">
-                                    <div className="w-2 h-2 rounded-full bg-blue-500 mt-1.5 flex-shrink-0" />
-                                    <div>
-                                        <p className="text-sm text-gray-300">
-                                            <span className="font-bold text-white">{activity.user}</span> {activity.action}
-                                        </p>
-                                        <p className="text-xs text-gray-500 mt-0.5">vor {activity.time}</p>
+                        
+                        {myHistory.length > 0 ? (
+                            <div className="space-y-4">
+                                {myHistory.slice(0, 5).map((activity, idx) => (
+                                    <div key={idx} className="flex gap-3 items-start border-l-2 border-gray-700 pl-3 pb-1 animate-in slide-in-from-right-2">
+                                        <div className="w-2 h-2 rounded-full bg-green-500 mt-1.5 flex-shrink-0" />
+                                        <div>
+                                            <p className="text-sm text-gray-200 font-bold">
+                                                {activity.type}
+                                            </p>
+                                            <p className="text-xs text-gray-400">
+                                                {activity.duration} Min • {new Date(activity.date).toLocaleDateString()}
+                                            </p>
+                                        </div>
                                     </div>
-                                </div>
-                            ))}
-                        </div>
-                        <button className="w-full mt-4 text-xs text-center text-gray-500 hover:text-white transition-colors">
-                            Mehr Aktivitäten anzeigen
-                        </button>
-                    </div>
-
-                    {/* QUICK ACTIONS */}
-                    <div className="bg-gray-800 rounded-2xl p-5 border border-gray-700">
-                        <h3 className="text-sm font-bold text-gray-400 uppercase mb-3">Quick Actions</h3>
-                        <div className="space-y-2">
-                            <button className="w-full flex items-center justify-between p-3 bg-gray-700/50 hover:bg-gray-700 rounded-lg text-sm text-gray-200 transition-colors">
-                                <span className="flex items-center gap-2"><Dumbbell size={16} className="text-blue-400"/> Workout loggen</span>
-                                <ArrowRight size={14} className="text-gray-500"/>
-                            </button>
-                            <button className="w-full flex items-center justify-between p-3 bg-gray-700/50 hover:bg-gray-700 rounded-lg text-sm text-gray-200 transition-colors">
-                                <span className="flex items-center gap-2"><Trophy size={16} className="text-yellow-400"/> Ziel anpassen</span>
-                                <ArrowRight size={14} className="text-gray-500"/>
-                            </button>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="text-center py-8 text-gray-500">
+                                <p className="text-sm">Noch keine Aktivitäten.</p>
+                                <p className="text-xs mt-1">Logge dein erstes Workout!</p>
+                            </div>
+                        )}
+                        
+                        <div className="mt-6 pt-4 border-t border-gray-700">
+                             <h4 className="text-xs font-bold text-gray-500 uppercase mb-2">Community Pulse</h4>
+                             <div className="text-xs text-gray-400 space-y-2">
+                                 <p>Sarah hat gerade <span className="text-white">Hyrox Training</span> beendet.</p>
+                                 <p>Tom sucht einen <span className="text-white">Laufpartner</span> in München.</p>
+                             </div>
                         </div>
                     </div>
                 </div>

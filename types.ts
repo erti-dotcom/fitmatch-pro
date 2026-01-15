@@ -16,17 +16,29 @@ export enum SkillLevel {
   COMPETITIVE = 'Wettkampf'
 }
 
+export interface ActivityLog {
+  id: string;
+  type: string;
+  duration: number; // in minutes
+  date: string; // ISO string
+  notes?: string;
+}
+
 export interface UserProfile {
   id: string;
-  email: string; // New field for auth
+  email: string;
   name: string;
   age: number;
   location: string;
   bio: string;
   sports: SportType[];
   level: SkillLevel;
-  frequency: number; // times per week
+  frequency: number;
   avatar: string;
+  // New Local Stats
+  streak?: number;
+  lastWorkout?: string;
+  activityHistory?: ActivityLog[];
 }
 
 export interface ChatMessage {
