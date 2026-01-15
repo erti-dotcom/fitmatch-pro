@@ -6,6 +6,7 @@ export enum SportType {
   CYCLING = 'Radfahren',
   YOGA = 'Yoga',
   TENNIS = 'Tennis',
+  SWIMMING = 'Schwimmen',
   OTHER = 'Andere'
 }
 
@@ -16,13 +17,26 @@ export enum SkillLevel {
   COMPETITIVE = 'Wettkampf'
 }
 
+export interface Comment {
+    id: string;
+    userId: string;
+    userName: string;
+    text: string;
+    timestamp: number;
+}
+
 export interface ActivityLog {
   id: string;
+  userId: string; // New: Link activity to user
   type: string;
   duration: number; // in minutes
   date: string; // ISO string
   notes?: string;
-  taggedUserIds?: string[]; // IDs of friends tagged in this workout
+  calories?: number;
+  distance?: number; // km
+  taggedUserIds?: string[]; 
+  likes?: string[]; // Array of User IDs who liked this
+  comments?: Comment[];
 }
 
 export interface UserProfile {
@@ -36,11 +50,15 @@ export interface UserProfile {
   level: SkillLevel;
   frequency: number;
   avatar: string;
-  // New Local Stats & Social
+  
+  // Social & Stats
   streak?: number;
   lastWorkout?: string;
+  friends?: string[]; // IDs of people I follow
+  followers?: string[]; // IDs of people following me (Mocked mostly)
+  
+  // Flattened history for easier access, though in real DB this is a separate table
   activityHistory?: ActivityLog[];
-  friends?: string[]; // List of User IDs allowed to be tagged
 }
 
 export interface ChatMessage {

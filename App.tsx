@@ -5,6 +5,9 @@ import { supabase } from './lib/supabaseClient';
 import { MatchCard } from './components/MatchCard';
 import { Dashboard } from './components/Dashboard';
 import { AuthScreen } from './components/AuthScreen';
+import { SocialFeed } from './components/SocialFeed';
+import { ProfileView } from './components/ProfileView';
+import { FriendsList } from './components/FriendsList';
 import { getTrainingPlan } from './services/geminiService';
 import { 
   Users, 
@@ -19,21 +22,53 @@ import {
   Filter,
   X,
   CheckCircle,
-  UserPlus
+  Home,
+  Map,
+  Compass
 } from 'lucide-react';
 
 // Navigation Tabs
 enum Tab {
-  DASHBOARD = 'dashboard',
-  MATCHES = 'matches',
+  FEED = 'feed', // New Home
+  DISCOVER = 'discover', // Was Matches
+  DASHBOARD = 'dashboard', // Stats
   CHAT = 'chat',
   PROFILE = 'profile',
-  AI_COACH = 'ai_coach'
+  AI_COACH = 'ai_coach',
+  FRIENDS = 'friends' // New
 }
+
+// Helper to generate fake activities for friends (Simulation for Feed)
+const generateMockActivities = (users: UserProfile[]): ActivityLog[] => {
+    const activities: ActivityLog[] = [];
+    users.forEach(u => {
+        // Randomly generate 1-3 activities per user from the last week
+        const count = Math.floor(Math.random() * 3) + 1;
+        for(let i=0; i<count; i++) {
+            const sport = u.sports[Math.floor(Math.random() * u.sports.length)];
+            const daysAgo = Math.floor(Math.random() * 5);
+            const date = new Date();
+            date.setDate(date.getDate() - daysAgo);
+            date.setHours(Math.random() * 12 + 8); // 8am - 8pm
+            
+            activities.push({
+                id: `mock_${u.id}_${i}`,
+                userId: u.id,
+                type: sport,
+                duration: Math.floor(Math.random() * 60) + 20,
+                date: date.toISOString(),
+                likes: Math.random() > 0.5 ? ['me'] : [],
+                notes: ['Harter Grind heute!', 'Endlich wieder Sonne.', 'Personal Best geknackt.', 'Easy run.'][Math.floor(Math.random() * 4)],
+                distance: sport === SportType.RUNNING ? Math.floor(Math.random() * 10) + 5 : undefined
+            });
+        }
+    });
+    return activities;
+};
 
 const App = () => {
   // --- STATE MANAGEMENT ---
-  const [activeTab, setActiveTab] = useState<Tab>(Tab.MATCHES);
+  const [activeTab, setActiveTab] = useState<Tab>(Tab.FEED);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
@@ -42,6 +77,7 @@ const App = () => {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_CHAT_MESSAGES);
   const [selectedChatPartner, setSelectedChatPartner] = useState<string | null>(null);
+  const [feedActivities, setFeedActivities] = useState<ActivityLog[]>([]);
   
   // Search & Filters
   const [searchTerm, setSearchTerm] = useState('');
@@ -51,7 +87,9 @@ const App = () => {
   const [showWorkoutModal, setShowWorkoutModal] = useState(false);
   const [logActivity, setLogActivity] = useState('Gym');
   const [logDuration, setLogDuration] = useState('60');
-  const [taggedFriends, setTaggedFriends] = useState<string[]>([]); // New: Tagging
+  const [logDistance, setLogDistance] = useState(''); // New
+  const [logNotes, setLogNotes] = useState(''); // New
+  const [taggedFriends, setTaggedFriends] = useState<string[]>([]);
 
   // Form Inputs (Profile Editing)
   const [nameInput, setNameInput] = useState('');
@@ -60,8 +98,8 @@ const App = () => {
   const [selectedSports, setSelectedSports] = useState<SportType[]>([]);
   const [bioInput, setBioInput] = useState('');
   const [avatarUrl, setAvatarUrl] = useState('');
-  const [levelInput, setLevelInput] = useState<SkillLevel>(SkillLevel.BEGINNER); // New
-  const [frequencyInput, setFrequencyInput] = useState(3); // New
+  const [levelInput, setLevelInput] = useState<SkillLevel>(SkillLevel.BEGINNER);
+  const [frequencyInput, setFrequencyInput] = useState(3);
   
   // Chat Input
   const [chatInput, setChatInput] = useState('');
@@ -106,7 +144,7 @@ const App = () => {
             setLevelInput(userProfile.level || SkillLevel.BEGINNER);
             setFrequencyInput(userProfile.frequency || 3);
             
-            setActiveTab(Tab.DASHBOARD);
+            setActiveTab(Tab.FEED);
         }
       }
       setAuthLoading(false);
@@ -114,14 +152,19 @@ const App = () => {
 
     checkSession();
 
-    // Fetch other users
+    // Fetch other users & Generate Mock Feed
     const fetchUsers = async () => {
         const { data: profiles } = await supabase.from('profiles').select('*');
-        if (profiles) {
-            setUsers(profiles.length > 1 ? profiles as UserProfile[] : MOCK_USERS);
-        } else {
-            setUsers(MOCK_USERS);
+        let appUsers = MOCK_USERS;
+        if (profiles && profiles.length > 1) {
+            appUsers = profiles as UserProfile[];
         }
+        setUsers(appUsers);
+        
+        // GENERATE MOCK FEED
+        // This simulates a "Real" database of activities from friends
+        const mockFeed = generateMockActivities(appUsers);
+        setFeedActivities(mockFeed);
     };
     fetchUsers();
 
@@ -147,17 +190,21 @@ const App = () => {
     setLevelInput(user.level || SkillLevel.BEGINNER);
     setFrequencyInput(user.frequency || 3);
     
+    // Regenerate feed with logged in user context
+    const mockFeed = generateMockActivities(users);
+    setFeedActivities(mockFeed);
+    
     if (!user.sports || user.sports.length === 0) {
         setIsEditingProfile(true);
     } else {
-        setActiveTab(Tab.MATCHES);
+        setActiveTab(Tab.FEED);
     }
   };
 
   const handleLogout = async () => {
       await supabase.auth.signOut();
       setCurrentUser(null);
-      setActiveTab(Tab.MATCHES);
+      setActiveTab(Tab.FEED);
       setIsEditingProfile(false);
   };
 
@@ -176,13 +223,7 @@ const App = () => {
       
       const updatedUser = { ...currentUser, friends: newFriends };
       setCurrentUser(updatedUser);
-      
-      // Persist to local storage
-      const existingStats = JSON.parse(localStorage.getItem(`fitmatch_stats_${currentUser.id}`) || '{}');
-      localStorage.setItem(`fitmatch_stats_${currentUser.id}`, JSON.stringify({
-          ...existingStats,
-          friends: newFriends
-      }));
+      persistUserStats(updatedUser);
   };
 
   // --- WORKOUT LOGGING LOGIC ---
@@ -191,10 +232,13 @@ const App = () => {
 
       const newActivity: ActivityLog = {
           id: Date.now().toString(),
+          userId: currentUser.id,
           type: logActivity,
           duration: parseInt(logDuration) || 0,
           date: new Date().toISOString(),
-          taggedUserIds: taggedFriends // Save tagged friends
+          taggedUserIds: taggedFriends,
+          notes: logNotes,
+          distance: logDistance ? parseFloat(logDistance) : undefined
       };
 
       // Calculate Streak
@@ -214,19 +258,24 @@ const App = () => {
       };
 
       setCurrentUser(updatedUser);
-      
-      // Persist to Local Storage
-      const statsToSave = {
-          streak: updatedUser.streak,
-          lastWorkout: updatedUser.lastWorkout,
-          activityHistory: updatedUser.activityHistory,
-          friends: updatedUser.friends
-      };
-      localStorage.setItem(`fitmatch_stats_${currentUser.id}`, JSON.stringify(statsToSave));
+      persistUserStats(updatedUser);
 
       setShowWorkoutModal(false);
-      setTaggedFriends([]); // Reset tags
+      setTaggedFriends([]);
+      setLogNotes('');
+      setLogDistance('');
   };
+
+  const persistUserStats = (user: UserProfile) => {
+      const statsToSave = {
+          streak: user.streak,
+          lastWorkout: user.lastWorkout,
+          activityHistory: user.activityHistory,
+          friends: user.friends,
+          followers: user.followers
+      };
+      localStorage.setItem(`fitmatch_stats_${user.id}`, JSON.stringify(statsToSave));
+  }
   
   const toggleTagFriend = (id: string) => {
       if (taggedFriends.includes(id)) {
@@ -264,7 +313,6 @@ const App = () => {
   const handleSaveProfile = async () => {
     if (!currentUser) return;
     
-    // Construct updated user object
     const updatedUser: UserProfile = {
       ...currentUser,
       name: nameInput,
@@ -277,9 +325,6 @@ const App = () => {
       avatar: avatarUrl || currentUser.avatar 
     };
 
-    // Update in Supabase
-    // Note: If 'level' or 'frequency' columns don't exist in Supabase yet, this might error or ignore them.
-    // For this demo, we assume the types.ts matches the DB or it fails silently for those fields.
     const { error } = await supabase.from('profiles').update({
             name: updatedUser.name,
             age: updatedUser.age,
@@ -291,17 +336,9 @@ const App = () => {
             frequency: updatedUser.frequency
         }).eq('id', currentUser.id);
 
-    if (!error) {
-        setCurrentUser(updatedUser);
-        setIsEditingProfile(false);
-        setActiveTab(Tab.DASHBOARD);
-    } else {
-        // Fallback: If Supabase fails (e.g. missing columns), save locally so user sees update
-        console.warn("Saving mostly locally due to DB schema mismatch maybe");
-        setCurrentUser(updatedUser);
-        setIsEditingProfile(false);
-        setActiveTab(Tab.DASHBOARD);
-    }
+    // Always update local state immediately
+    setCurrentUser(updatedUser);
+    setIsEditingProfile(false);
   };
 
   const toggleSport = (sport: SportType) => {
@@ -345,15 +382,21 @@ const App = () => {
       return matchesSearch && matchesSport;
   });
 
+  // Calculate Feed
+  const currentFeed = currentUser 
+    ? [...(currentUser.activityHistory || []), ...feedActivities.filter(a => currentUser.friends?.includes(a.userId))] 
+    : [];
+
   // --- RENDER ---
   if (authLoading) return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">Lade App...</div>;
   if (!currentUser) return <AuthScreen onLogin={handleLogin} />;
 
-  // EDIT PROFILE
+  // EDIT PROFILE MODAL
   if (isEditingProfile) {
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
-        <div className="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-md border border-gray-700 animate-in fade-in zoom-in duration-300 my-8 overflow-y-auto max-h-[90vh]">
+      <div className="fixed inset-0 z-50 bg-gray-900 overflow-y-auto">
+        <div className="flex items-center justify-center min-h-screen p-4">
+        <div className="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-md border border-gray-700 animate-in fade-in zoom-in duration-300 my-8">
           <div className="flex justify-center mb-6 relative group">
             <div className="relative cursor-pointer">
                 <img src={avatarUrl || currentUser.avatar} alt="Avatar" className="w-24 h-24 rounded-full object-cover border-4 border-gray-700 group-hover:border-blue-500 transition-all"/>
@@ -363,11 +406,10 @@ const App = () => {
                 </label>
             </div>
           </div>
-          <h1 className="text-3xl font-bold text-center text-white mb-2">Dein Profil</h1>
+          <h1 className="text-3xl font-bold text-center text-white mb-2">Profil bearbeiten</h1>
           <div className="space-y-4">
             <div><label className="text-gray-400 text-sm">Name</label><input type="text" value={nameInput} onChange={(e) => setNameInput(e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-white" /></div>
             
-            {/* NEW: Level & Frequency */}
             <div className="grid grid-cols-2 gap-4">
                 <div>
                     <label className="text-gray-400 text-sm">Level</label>
@@ -400,6 +442,7 @@ const App = () => {
             <button onClick={() => setIsEditingProfile(false)} className="w-full text-gray-400 text-sm py-2 hover:text-white">Abbrechen</button>
           </div>
         </div>
+        </div>
       </div>
     );
   }
@@ -427,17 +470,39 @@ const App = () => {
                               {Object.values(SportType).map(s => <option key={s} value={s}>{s}</option>)}
                           </select>
                       </div>
+                      <div className="grid grid-cols-2 gap-4">
+                          <div>
+                              <label className="block text-sm text-gray-400 mb-1">Dauer (Min)</label>
+                              <input 
+                                type="number" 
+                                value={logDuration}
+                                onChange={(e) => setLogDuration(e.target.value)}
+                                className="w-full bg-gray-700 border border-gray-600 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500"
+                              />
+                          </div>
+                          <div>
+                              <label className="block text-sm text-gray-400 mb-1">Distanz (km)</label>
+                              <input 
+                                type="number" 
+                                value={logDistance}
+                                onChange={(e) => setLogDistance(e.target.value)}
+                                placeholder="Optional"
+                                className="w-full bg-gray-700 border border-gray-600 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500"
+                              />
+                          </div>
+                      </div>
+                      
                       <div>
-                          <label className="block text-sm text-gray-400 mb-1">Dauer (Minuten)</label>
-                          <input 
-                            type="number" 
-                            value={logDuration}
-                            onChange={(e) => setLogDuration(e.target.value)}
-                            className="w-full bg-gray-700 border border-gray-600 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500"
+                          <label className="block text-sm text-gray-400 mb-1">Notiz / Caption</label>
+                          <textarea
+                             value={logNotes}
+                             onChange={(e) => setLogNotes(e.target.value)}
+                             placeholder="Wie war's? @friends"
+                             className="w-full bg-gray-700 border border-gray-600 rounded-lg p-3 text-white h-20 text-sm"
                           />
                       </div>
                       
-                      {/* NEW: Tag Friends */}
+                      {/* Tag Friends */}
                       <div>
                           <label className="block text-sm text-gray-400 mb-2">Freunde markieren</label>
                           <div className="max-h-32 overflow-y-auto border border-gray-700 rounded-lg p-2 space-y-2">
@@ -466,7 +531,7 @@ const App = () => {
                         onClick={handleLogWorkout}
                         className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 mt-2"
                       >
-                          <CheckCircle size={18}/> Speichern
+                          <CheckCircle size={18}/> Workout Teilen
                       </button>
                   </div>
               </div>
@@ -474,20 +539,29 @@ const App = () => {
       )}
 
       {/* SIDEBAR */}
-      <nav className="w-20 md:w-64 bg-gray-800 border-r border-gray-700 flex flex-col items-center md:items-start py-6 flex-shrink-0 sticky top-0 h-screen">
+      <nav className="w-20 md:w-64 bg-gray-800 border-r border-gray-700 flex flex-col items-center md:items-start py-6 flex-shrink-0 sticky top-0 h-screen z-10">
         <div className="mb-8 px-4 flex items-center gap-3">
-          <div className="bg-blue-600 p-2 rounded-lg"><Activity className="text-white" size={24} /></div>
-          <span className="hidden md:block text-xl font-bold tracking-tight">FitMatch</span>
+          <div className="bg-gradient-to-br from-blue-600 to-blue-800 p-2 rounded-lg shadow-lg shadow-blue-900/50"><Activity className="text-white" size={24} /></div>
+          <span className="hidden md:block text-xl font-black tracking-tighter italic">FitGram</span>
         </div>
-        <div className="space-y-2 w-full px-2">
-          <NavButton active={activeTab === Tab.DASHBOARD} onClick={() => setActiveTab(Tab.DASHBOARD)} icon={<Activity size={20} />} label="Dashboard" />
-          <NavButton active={activeTab === Tab.MATCHES} onClick={() => setActiveTab(Tab.MATCHES)} icon={<Users size={20} />} label="Matches Finden" />
-          <NavButton active={activeTab === Tab.CHAT} onClick={() => setActiveTab(Tab.CHAT)} icon={<MessageSquare size={20} />} label="Nachrichten" />
-          <NavButton active={activeTab === Tab.AI_COACH} onClick={() => setActiveTab(Tab.AI_COACH)} icon={<Sparkles size={20} />} label="AI Coach" />
-          <NavButton active={activeTab === Tab.PROFILE} onClick={() => setIsEditingProfile(true)} icon={<UserCircle size={20} />} label="Mein Profil" />
+        <div className="space-y-1 w-full px-2">
+          <NavButton active={activeTab === Tab.FEED} onClick={() => setActiveTab(Tab.FEED)} icon={<Home size={22} />} label="Feed" />
+          <NavButton active={activeTab === Tab.DISCOVER} onClick={() => setActiveTab(Tab.DISCOVER)} icon={<Compass size={22} />} label="Entdecken" />
+          <NavButton active={activeTab === Tab.FRIENDS} onClick={() => setActiveTab(Tab.FRIENDS)} icon={<Users size={22} />} label="Community" />
+          <NavButton active={activeTab === Tab.DASHBOARD} onClick={() => setActiveTab(Tab.DASHBOARD)} icon={<Activity size={22} />} label="Statistik" />
+          <NavButton active={activeTab === Tab.CHAT} onClick={() => setActiveTab(Tab.CHAT)} icon={<MessageSquare size={22} />} label="Nachrichten" />
+          <NavButton active={activeTab === Tab.AI_COACH} onClick={() => setActiveTab(Tab.AI_COACH)} icon={<Sparkles size={22} />} label="AI Coach" />
+          <NavButton active={activeTab === Tab.PROFILE} onClick={() => setActiveTab(Tab.PROFILE)} icon={<UserCircle size={22} />} label="Mein Profil" />
         </div>
         <div className="mt-auto px-4 w-full space-y-4">
-            <div className="hidden md:flex items-center gap-3 p-3 bg-gray-700/50 rounded-xl">
+             <button 
+                onClick={() => setShowWorkoutModal(true)}
+                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20"
+             >
+                <CheckCircle size={20}/> <span className="hidden md:inline">Workout Loggen</span>
+             </button>
+
+            <div className="hidden md:flex items-center gap-3 p-3 bg-gray-700/50 rounded-xl cursor-pointer hover:bg-gray-700" onClick={() => setActiveTab(Tab.PROFILE)}>
                 <img src={currentUser.avatar} alt="Me" className="w-8 h-8 rounded-full bg-gray-600 object-cover" />
                 <div className="overflow-hidden"><p className="text-sm font-bold truncate">{currentUser.name}</p></div>
             </div>
@@ -496,11 +570,11 @@ const App = () => {
       </nav>
 
       {/* MAIN CONTENT */}
-      <main className="flex-1 p-4 md:p-8 overflow-y-auto">
-        <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
-            <h2 className="text-2xl font-bold text-white capitalize">{activeTab.replace('_', ' ')}</h2>
-            {activeTab === Tab.MATCHES && (
-                <div className="flex gap-2 w-full md:w-auto">
+      <main className="flex-1 p-0 md:p-8 overflow-y-auto">
+        <header className="p-4 md:p-0 md:mb-8 flex justify-between items-center sticky top-0 bg-gray-900/90 backdrop-blur-md z-10 md:static md:bg-transparent">
+            <h2 className="text-2xl font-bold text-white capitalize">{activeTab === Tab.FEED ? 'Dein Feed' : activeTab.replace('_', ' ')}</h2>
+            {activeTab === Tab.DISCOVER && (
+                <div className="flex gap-2 w-full md:w-auto ml-4">
                      <div className="relative flex-1 md:flex-initial">
                         <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Suchen..." className="bg-gray-800 border border-gray-700 rounded-full py-2 pl-10 pr-4 text-sm text-gray-300 w-full md:w-64" />
                         <Search className="absolute left-3 top-2.5 text-gray-500" size={16} />
@@ -516,90 +590,108 @@ const App = () => {
             )}
         </header>
 
-        {activeTab === Tab.DASHBOARD && (
-            <Dashboard 
-                user={currentUser} 
-                matches={users.filter(u => u.id !== currentUser?.id)} 
-                allUsers={users}
-                onOpenLogModal={() => setShowWorkoutModal(true)}
-                onSwitchTab={setActiveTab}
-            />
-        )}
-
-        {/* MATCHES LIST */}
-        {activeTab === Tab.MATCHES && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in zoom-in duration-300">
-            {filteredUsers.length > 0 ? (
-                filteredUsers.map(user => (
-                  <MatchCard 
-                    key={user.id} 
-                    currentUser={currentUser} 
-                    candidate={user} 
-                    isFriend={currentUser.friends?.includes(user.id) || false}
-                    onToggleFriend={handleToggleFriend} 
-                    onChat={handleStartChat} 
-                  />
-                ))
-            ) : (
-                <div className="col-span-3 text-center text-gray-500 p-12">Keine Sportler gefunden.</div>
+        <div className="px-4 md:px-0 pb-20 md:pb-0">
+            {activeTab === Tab.FEED && (
+                <SocialFeed currentUser={currentUser} activities={currentFeed} users={users} />
             )}
-          </div>
-        )}
 
-        {/* CHAT TAB */}
-        {activeTab === Tab.CHAT && (
-          <div className="bg-gray-800 rounded-2xl h-[calc(100vh-160px)] flex border border-gray-700 overflow-hidden shadow-2xl">
-             <div className="w-1/3 border-r border-gray-700 bg-gray-800/50 flex flex-col">
-                 <div className="p-4 border-b border-gray-700 font-bold text-gray-400 text-sm">CHATS</div>
-                 <div className="overflow-y-auto flex-1">
-                    {users.filter(u => u.id !== currentUser?.id).map(u => (
-                        <div key={u.id} onClick={() => setSelectedChatPartner(u.id)} className={`p-4 flex items-center gap-3 cursor-pointer hover:bg-gray-700/50 ${selectedChatPartner === u.id ? 'bg-blue-900/20 border-r-2 border-blue-500' : ''}`}>
-                            <img src={u.avatar} className="w-10 h-10 rounded-full object-cover" />
-                            <div><h4 className="font-bold text-gray-200">{u.name}</h4><p className="text-xs text-gray-500 truncate">...</p></div>
-                        </div>
-                    ))}
+            {activeTab === Tab.PROFILE && (
+                <ProfileView user={currentUser} isOwnProfile={true} onEdit={() => setIsEditingProfile(true)} />
+            )}
+
+            {activeTab === Tab.DASHBOARD && (
+                <Dashboard 
+                    user={currentUser} 
+                    matches={users.filter(u => u.id !== currentUser?.id)} 
+                    allUsers={users}
+                    onOpenLogModal={() => setShowWorkoutModal(true)}
+                    onSwitchTab={setActiveTab}
+                />
+            )}
+
+            {activeTab === Tab.FRIENDS && (
+                <FriendsList 
+                    users={users} 
+                    followingIds={currentUser.friends || []} 
+                    onUnfollow={handleToggleFriend} 
+                    onProfileClick={(id) => alert("Profil Ansicht für andere User kommt bald!")} 
+                />
+            )}
+
+            {/* MATCHES LIST */}
+            {activeTab === Tab.DISCOVER && (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in zoom-in duration-300">
+                {filteredUsers.length > 0 ? (
+                    filteredUsers.map(user => (
+                      <MatchCard 
+                        key={user.id} 
+                        currentUser={currentUser} 
+                        candidate={user} 
+                        isFriend={currentUser.friends?.includes(user.id) || false}
+                        onToggleFriend={handleToggleFriend} 
+                        onChat={handleStartChat} 
+                      />
+                    ))
+                ) : (
+                    <div className="col-span-3 text-center text-gray-500 p-12">Keine Sportler gefunden.</div>
+                )}
+              </div>
+            )}
+
+            {/* CHAT TAB */}
+            {activeTab === Tab.CHAT && (
+              <div className="bg-gray-800 rounded-2xl h-[calc(100vh-160px)] flex border border-gray-700 overflow-hidden shadow-2xl">
+                 <div className="w-1/3 border-r border-gray-700 bg-gray-800/50 flex flex-col">
+                     <div className="p-4 border-b border-gray-700 font-bold text-gray-400 text-sm">CHATS</div>
+                     <div className="overflow-y-auto flex-1">
+                        {users.filter(u => u.id !== currentUser?.id).map(u => (
+                            <div key={u.id} onClick={() => setSelectedChatPartner(u.id)} className={`p-4 flex items-center gap-3 cursor-pointer hover:bg-gray-700/50 ${selectedChatPartner === u.id ? 'bg-blue-900/20 border-r-2 border-blue-500' : ''}`}>
+                                <img src={u.avatar} className="w-10 h-10 rounded-full object-cover" />
+                                <div><h4 className="font-bold text-gray-200">{u.name}</h4><p className="text-xs text-gray-500 truncate">...</p></div>
+                            </div>
+                        ))}
+                     </div>
                  </div>
-             </div>
-             <div className="flex-1 flex flex-col bg-gray-900/50">
-                 {selectedChatPartner ? (
-                    <>
-                         <div className="p-4 border-b border-gray-700"><h3 className="font-bold text-lg text-white">{users.find(u => u.id === selectedChatPartner)?.name}</h3></div>
-                         <div className="flex-1 p-4 overflow-y-auto space-y-4">
-                            {messages.filter(m => (m.senderId === currentUser.id && m.senderId === selectedChatPartner) || (m.senderId === selectedChatPartner) || (m.senderId === currentUser.id && selectedChatPartner)).map(msg => (
-                                <div key={msg.id} className={`flex ${msg.senderId === currentUser.id ? 'justify-end' : 'justify-start'}`}>
-                                    <div className={`max-w-[70%] p-3 rounded-2xl text-sm ${msg.senderId === currentUser.id ? 'bg-blue-600 text-white rounded-br-none' : 'bg-gray-700 text-gray-200 rounded-bl-none'}`}>{msg.text}</div>
-                                </div>
-                            ))}
-                         </div>
-                         <div className="p-4 bg-gray-800 border-t border-gray-700 flex gap-2">
-                             <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} className="flex-1 bg-gray-700 rounded-full px-4 py-2 text-white" onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} />
-                             <button onClick={handleSendMessage} className="bg-blue-600 p-2 rounded-full hover:bg-blue-500"><Send size={20} className="text-white" /></button>
-                         </div>
-                    </>
-                 ) : <div className="flex-1 flex items-center justify-center text-gray-500">Wähle einen Chat</div>}
-             </div>
-          </div>
-        )}
-
-        {/* AI COACH TAB */}
-        {activeTab === Tab.AI_COACH && (
-            <div className="max-w-2xl mx-auto bg-gray-800 rounded-2xl p-8 border border-gray-700 shadow-xl">
-                 <div className="text-center mb-8"><Sparkles size={32} className="text-purple-400 mx-auto mb-4" /><h2 className="text-2xl font-bold text-white mb-2">AI Coach</h2></div>
-                 <div className="space-y-4">
-                     <input type="text" value={coachGoal} onChange={(e) => setCoachGoal(e.target.value)} placeholder="Ziel eingeben..." className="w-full bg-gray-700 border border-gray-600 rounded-xl p-4 text-white" />
-                     <button onClick={handleGeneratePlan} disabled={coachLoading || !coachGoal} className="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 rounded-xl flex justify-center items-center gap-2">{coachLoading ? <Activity className="animate-spin" /> : 'Generieren'}</button>
+                 <div className="flex-1 flex flex-col bg-gray-900/50">
+                     {selectedChatPartner ? (
+                        <>
+                             <div className="p-4 border-b border-gray-700"><h3 className="font-bold text-lg text-white">{users.find(u => u.id === selectedChatPartner)?.name}</h3></div>
+                             <div className="flex-1 p-4 overflow-y-auto space-y-4">
+                                {messages.filter(m => (m.senderId === currentUser.id && m.senderId === selectedChatPartner) || (m.senderId === selectedChatPartner) || (m.senderId === currentUser.id && selectedChatPartner)).map(msg => (
+                                    <div key={msg.id} className={`flex ${msg.senderId === currentUser.id ? 'justify-end' : 'justify-start'}`}>
+                                        <div className={`max-w-[70%] p-3 rounded-2xl text-sm ${msg.senderId === currentUser.id ? 'bg-blue-600 text-white rounded-br-none' : 'bg-gray-700 text-gray-200 rounded-bl-none'}`}>{msg.text}</div>
+                                    </div>
+                                ))}
+                             </div>
+                             <div className="p-4 bg-gray-800 border-t border-gray-700 flex gap-2">
+                                 <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} className="flex-1 bg-gray-700 rounded-full px-4 py-2 text-white" onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} />
+                                 <button onClick={handleSendMessage} className="bg-blue-600 p-2 rounded-full hover:bg-blue-500"><Send size={20} className="text-white" /></button>
+                             </div>
+                        </>
+                     ) : <div className="flex-1 flex items-center justify-center text-gray-500">Wähle einen Chat</div>}
                  </div>
-                 {coachPlan && <div className="mt-8 p-6 bg-gray-900 rounded-xl border border-gray-700 prose prose-invert max-w-none text-gray-300 whitespace-pre-line">{coachPlan}</div>}
-            </div>
-        )}
+              </div>
+            )}
 
+            {/* AI COACH TAB */}
+            {activeTab === Tab.AI_COACH && (
+                <div className="max-w-2xl mx-auto bg-gray-800 rounded-2xl p-8 border border-gray-700 shadow-xl">
+                     <div className="text-center mb-8"><Sparkles size={32} className="text-purple-400 mx-auto mb-4" /><h2 className="text-2xl font-bold text-white mb-2">AI Coach</h2></div>
+                     <div className="space-y-4">
+                         <input type="text" value={coachGoal} onChange={(e) => setCoachGoal(e.target.value)} placeholder="Ziel eingeben..." className="w-full bg-gray-700 border border-gray-600 rounded-xl p-4 text-white" />
+                         <button onClick={handleGeneratePlan} disabled={coachLoading || !coachGoal} className="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 rounded-xl flex justify-center items-center gap-2">{coachLoading ? <Activity className="animate-spin" /> : 'Generieren'}</button>
+                     </div>
+                     {coachPlan && <div className="mt-8 p-6 bg-gray-900 rounded-xl border border-gray-700 prose prose-invert max-w-none text-gray-300 whitespace-pre-line">{coachPlan}</div>}
+                </div>
+            )}
+        </div>
       </main>
     </div>
   );
 };
 
 const NavButton = ({ active, onClick, icon, label }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string }) => (
-    <button onClick={onClick} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${active ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>{icon}<span className="hidden md:block font-medium">{label}</span></button>
+    <button onClick={onClick} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${active ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>{icon}<span className="hidden md:block font-medium">{label}</span></button>
 );
 
 export default App;
