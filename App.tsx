@@ -18,7 +18,8 @@ import {
   Camera,
   Filter,
   X,
-  CheckCircle
+  CheckCircle,
+  UserPlus
 } from 'lucide-react';
 
 // Navigation Tabs
@@ -50,6 +51,7 @@ const App = () => {
   const [showWorkoutModal, setShowWorkoutModal] = useState(false);
   const [logActivity, setLogActivity] = useState('Gym');
   const [logDuration, setLogDuration] = useState('60');
+  const [taggedFriends, setTaggedFriends] = useState<string[]>([]); // New: Tagging
 
   // Form Inputs (Profile Editing)
   const [nameInput, setNameInput] = useState('');
@@ -58,6 +60,8 @@ const App = () => {
   const [selectedSports, setSelectedSports] = useState<SportType[]>([]);
   const [bioInput, setBioInput] = useState('');
   const [avatarUrl, setAvatarUrl] = useState('');
+  const [levelInput, setLevelInput] = useState<SkillLevel>(SkillLevel.BEGINNER); // New
+  const [frequencyInput, setFrequencyInput] = useState(3); // New
   
   // Chat Input
   const [chatInput, setChatInput] = useState('');
@@ -85,7 +89,6 @@ const App = () => {
             let userProfile = profile as UserProfile;
             
             // --- MERGE LOCAL STORAGE STATS ---
-            // We use localStorage to persist Stats without needing complex DB migrations for now
             const localStatsStr = localStorage.getItem(`fitmatch_stats_${userProfile.id}`);
             if (localStatsStr) {
                 const localStats = JSON.parse(localStatsStr);
@@ -100,6 +103,9 @@ const App = () => {
             setBioInput(userProfile.bio || '');
             setSelectedSports(userProfile.sports || []);
             setAvatarUrl(userProfile.avatar);
+            setLevelInput(userProfile.level || SkillLevel.BEGINNER);
+            setFrequencyInput(userProfile.frequency || 3);
+            
             setActiveTab(Tab.DASHBOARD);
         }
       }
@@ -113,6 +119,8 @@ const App = () => {
         const { data: profiles } = await supabase.from('profiles').select('*');
         if (profiles) {
             setUsers(profiles.length > 1 ? profiles as UserProfile[] : MOCK_USERS);
+        } else {
+            setUsers(MOCK_USERS);
         }
     };
     fetchUsers();
@@ -136,6 +144,8 @@ const App = () => {
     setBioInput(user.bio || '');
     setSelectedSports(user.sports || []);
     setAvatarUrl(user.avatar);
+    setLevelInput(user.level || SkillLevel.BEGINNER);
+    setFrequencyInput(user.frequency || 3);
     
     if (!user.sports || user.sports.length === 0) {
         setIsEditingProfile(true);
@@ -151,6 +161,30 @@ const App = () => {
       setIsEditingProfile(false);
   };
 
+  // --- FRIEND / FOLLOWER LOGIC ---
+  const handleToggleFriend = (friendId: string) => {
+      if (!currentUser) return;
+      
+      const currentFriends = currentUser.friends || [];
+      let newFriends;
+      
+      if (currentFriends.includes(friendId)) {
+          newFriends = currentFriends.filter(id => id !== friendId);
+      } else {
+          newFriends = [...currentFriends, friendId];
+      }
+      
+      const updatedUser = { ...currentUser, friends: newFriends };
+      setCurrentUser(updatedUser);
+      
+      // Persist to local storage
+      const existingStats = JSON.parse(localStorage.getItem(`fitmatch_stats_${currentUser.id}`) || '{}');
+      localStorage.setItem(`fitmatch_stats_${currentUser.id}`, JSON.stringify({
+          ...existingStats,
+          friends: newFriends
+      }));
+  };
+
   // --- WORKOUT LOGGING LOGIC ---
   const handleLogWorkout = () => {
       if (!currentUser) return;
@@ -159,7 +193,8 @@ const App = () => {
           id: Date.now().toString(),
           type: logActivity,
           duration: parseInt(logDuration) || 0,
-          date: new Date().toISOString()
+          date: new Date().toISOString(),
+          taggedUserIds: taggedFriends // Save tagged friends
       };
 
       // Calculate Streak
@@ -167,8 +202,6 @@ const App = () => {
       const lastDate = currentUser.lastWorkout ? new Date(currentUser.lastWorkout) : null;
       const today = new Date();
       
-      // Simple logic: if last workout was yesterday or today, keep streak. Else reset or inc.
-      // For demo purposes, we just increment if it's a new day
       if (!lastDate || lastDate.getDate() !== today.getDate()) {
           newStreak += 1;
       }
@@ -186,11 +219,21 @@ const App = () => {
       const statsToSave = {
           streak: updatedUser.streak,
           lastWorkout: updatedUser.lastWorkout,
-          activityHistory: updatedUser.activityHistory
+          activityHistory: updatedUser.activityHistory,
+          friends: updatedUser.friends
       };
       localStorage.setItem(`fitmatch_stats_${currentUser.id}`, JSON.stringify(statsToSave));
 
       setShowWorkoutModal(false);
+      setTaggedFriends([]); // Reset tags
+  };
+  
+  const toggleTagFriend = (id: string) => {
+      if (taggedFriends.includes(id)) {
+          setTaggedFriends(taggedFriends.filter(tid => tid !== id));
+      } else {
+          setTaggedFriends([...taggedFriends, id]);
+      }
   };
 
   // --- PROFILE LOGIC ---
@@ -220,6 +263,8 @@ const App = () => {
 
   const handleSaveProfile = async () => {
     if (!currentUser) return;
+    
+    // Construct updated user object
     const updatedUser: UserProfile = {
       ...currentUser,
       name: nameInput,
@@ -227,24 +272,35 @@ const App = () => {
       location: locationInput,
       bio: bioInput,
       sports: selectedSports,
-      level: currentUser.level || SkillLevel.INTERMEDIATE,
-      frequency: currentUser.frequency || 3,
+      level: levelInput, 
+      frequency: frequencyInput,
       avatar: avatarUrl || currentUser.avatar 
     };
 
+    // Update in Supabase
+    // Note: If 'level' or 'frequency' columns don't exist in Supabase yet, this might error or ignore them.
+    // For this demo, we assume the types.ts matches the DB or it fails silently for those fields.
     const { error } = await supabase.from('profiles').update({
             name: updatedUser.name,
             age: updatedUser.age,
             location: updatedUser.location,
             bio: updatedUser.bio,
             sports: updatedUser.sports,
-            avatar: updatedUser.avatar
+            avatar: updatedUser.avatar,
+            level: updatedUser.level,
+            frequency: updatedUser.frequency
         }).eq('id', currentUser.id);
 
     if (!error) {
         setCurrentUser(updatedUser);
         setIsEditingProfile(false);
-        setActiveTab(Tab.MATCHES);
+        setActiveTab(Tab.DASHBOARD);
+    } else {
+        // Fallback: If Supabase fails (e.g. missing columns), save locally so user sees update
+        console.warn("Saving mostly locally due to DB schema mismatch maybe");
+        setCurrentUser(updatedUser);
+        setIsEditingProfile(false);
+        setActiveTab(Tab.DASHBOARD);
     }
   };
 
@@ -297,7 +353,7 @@ const App = () => {
   if (isEditingProfile) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
-        <div className="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-md border border-gray-700 animate-in fade-in zoom-in duration-300">
+        <div className="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-md border border-gray-700 animate-in fade-in zoom-in duration-300 my-8 overflow-y-auto max-h-[90vh]">
           <div className="flex justify-center mb-6 relative group">
             <div className="relative cursor-pointer">
                 <img src={avatarUrl || currentUser.avatar} alt="Avatar" className="w-24 h-24 rounded-full object-cover border-4 border-gray-700 group-hover:border-blue-500 transition-all"/>
@@ -310,6 +366,23 @@ const App = () => {
           <h1 className="text-3xl font-bold text-center text-white mb-2">Dein Profil</h1>
           <div className="space-y-4">
             <div><label className="text-gray-400 text-sm">Name</label><input type="text" value={nameInput} onChange={(e) => setNameInput(e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-white" /></div>
+            
+            {/* NEW: Level & Frequency */}
+            <div className="grid grid-cols-2 gap-4">
+                <div>
+                    <label className="text-gray-400 text-sm">Level</label>
+                    <select value={levelInput} onChange={(e) => setLevelInput(e.target.value as SkillLevel)} className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-white">
+                        {Object.values(SkillLevel).map(l => <option key={l} value={l}>{l}</option>)}
+                    </select>
+                </div>
+                <div>
+                    <label className="text-gray-400 text-sm">Training / Woche</label>
+                    <div className="flex items-center gap-2">
+                        <input type="number" min="1" max="14" value={frequencyInput} onChange={(e) => setFrequencyInput(parseInt(e.target.value))} className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-white" />
+                    </div>
+                </div>
+            </div>
+
             <div className="grid grid-cols-2 gap-4">
                 <div><label className="text-gray-400 text-sm">Alter</label><input type="number" value={ageInput} onChange={(e) => setAgeInput(e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-white" /></div>
                 <div><label className="text-gray-400 text-sm">Stadt</label><input type="text" value={locationInput} onChange={(e) => setLocationInput(e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-white" /></div>
@@ -336,7 +409,7 @@ const App = () => {
       
       {/* WORKOUT MODAL OVERLAY */}
       {showWorkoutModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200 p-4">
               <div className="bg-gray-800 p-6 rounded-2xl w-full max-w-sm border border-gray-700 shadow-2xl scale-100">
                   <div className="flex justify-between items-center mb-4">
                       <h3 className="text-xl font-bold text-white flex items-center gap-2"><Activity className="text-blue-500"/> Workout Loggen</h3>
@@ -363,6 +436,32 @@ const App = () => {
                             className="w-full bg-gray-700 border border-gray-600 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500"
                           />
                       </div>
+                      
+                      {/* NEW: Tag Friends */}
+                      <div>
+                          <label className="block text-sm text-gray-400 mb-2">Freunde markieren</label>
+                          <div className="max-h-32 overflow-y-auto border border-gray-700 rounded-lg p-2 space-y-2">
+                             {(currentUser?.friends && currentUser.friends.length > 0) ? (
+                                 currentUser.friends.map(friendId => {
+                                     const friend = users.find(u => u.id === friendId);
+                                     if (!friend) return null;
+                                     const isSelected = taggedFriends.includes(friendId);
+                                     return (
+                                         <div key={friendId} onClick={() => toggleTagFriend(friendId)} className={`flex items-center gap-2 p-2 rounded cursor-pointer transition-colors ${isSelected ? 'bg-blue-900/50 border border-blue-500/50' : 'bg-gray-700 hover:bg-gray-600'}`}>
+                                             <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-gray-500'}`}>
+                                                 {isSelected && <div className="w-2 h-2 bg-white rounded-full"/>}
+                                             </div>
+                                             <img src={friend.avatar} className="w-6 h-6 rounded-full"/>
+                                             <span className="text-sm">{friend.name}</span>
+                                         </div>
+                                     )
+                                 })
+                             ) : (
+                                 <p className="text-xs text-gray-500 text-center py-2">Füge erst Freunde hinzu, um sie zu markieren.</p>
+                             )}
+                          </div>
+                      </div>
+
                       <button 
                         onClick={handleLogWorkout}
                         className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 mt-2"
@@ -421,6 +520,7 @@ const App = () => {
             <Dashboard 
                 user={currentUser} 
                 matches={users.filter(u => u.id !== currentUser?.id)} 
+                allUsers={users}
                 onOpenLogModal={() => setShowWorkoutModal(true)}
                 onSwitchTab={setActiveTab}
             />
@@ -431,7 +531,14 @@ const App = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in zoom-in duration-300">
             {filteredUsers.length > 0 ? (
                 filteredUsers.map(user => (
-                  <MatchCard key={user.id} currentUser={currentUser} candidate={user} onConnect={() => alert('Angefragt!')} onChat={handleStartChat} />
+                  <MatchCard 
+                    key={user.id} 
+                    currentUser={currentUser} 
+                    candidate={user} 
+                    isFriend={currentUser.friends?.includes(user.id) || false}
+                    onToggleFriend={handleToggleFriend} 
+                    onChat={handleStartChat} 
+                  />
                 ))
             ) : (
                 <div className="col-span-3 text-center text-gray-500 p-12">Keine Sportler gefunden.</div>

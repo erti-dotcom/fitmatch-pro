@@ -1,50 +1,51 @@
 import React, { useState, useEffect } from 'react';
-import { UserProfile } from '../types';
+import { UserProfile, DailyTip } from '../types';
+import { getPersonalizedTip } from '../services/geminiService';
 import { 
     Zap, 
     Trophy, 
     Flame, 
-    TrendingUp, 
     Clock, 
     ArrowRight, 
     MessageCircle,
     Dumbbell,
     Calendar,
     History,
-    Users
+    Users,
+    RefreshCw
 } from 'lucide-react';
 
 interface DashboardProps {
     user: UserProfile;
     matches: UserProfile[];
+    allUsers: UserProfile[]; // Needed to look up tagged friends
     onOpenLogModal: () => void;
     onSwitchTab: (tab: any) => void;
 }
 
-const HOURLY_TIPS = [
-    { title: "Morgen-Routine", text: "Trinke direkt nach dem Aufstehen 500ml Wasser mit einer Prise Salz für optimale Hydration vor dem Sport.", category: "Nutrition" },
-    { title: "Pre-Workout Focus", text: "Visualisiere deine Trainingseinheit 5 Minuten bevor du startest. Das steigert die neuromuskuläre Leistung.", category: "Mindset" },
-    { title: "Protein Timing", text: "Versuche innerhalb von 30-60 Minuten nach dem Training 20-30g Protein zu dir zu nehmen.", category: "Nutrition" },
-    { title: "Active Recovery", text: "An Ruhetagen hilft leichtes Spazieren oder Yoga, den Cortisolspiegel zu senken.", category: "Recovery" },
-    { title: "Schlaf-Optimierung", text: "Vermeide blaues Licht 1 Stunde vor dem Schlafen, um die Wachstumshormonausschüttung zu maximieren.", category: "Recovery" },
-    { title: "Hyrox Tipp", text: "Übe die Transitions! Die Zeit zwischen den Stationen entscheidet oft über den Sieg.", category: "Training" },
-    { title: "Lauftechnik", text: "Achte auf deine Schrittfrequenz. 170-180 Schritte pro Minute gelten als effizient und gelenkschonend.", category: "Training" },
-];
-
-export const Dashboard: React.FC<DashboardProps> = ({ user, matches, onOpenLogModal, onSwitchTab }) => {
-    const [currentTip, setCurrentTip] = useState(HOURLY_TIPS[0]);
+export const Dashboard: React.FC<DashboardProps> = ({ user, matches, allUsers, onOpenLogModal, onSwitchTab }) => {
+    const [currentTip, setCurrentTip] = useState<DailyTip | null>(null);
+    const [loadingTip, setLoadingTip] = useState(false);
     const [spotlightMatch, setSpotlightMatch] = useState<UserProfile | null>(null);
 
+    // Initial Load
     useEffect(() => {
-        const hour = new Date().getHours();
-        const tipIndex = hour % HOURLY_TIPS.length;
-        setCurrentTip(HOURLY_TIPS[tipIndex]);
-
+        // Load a random match
         if (matches.length > 0) {
             const randomMatch = matches[Math.floor(Math.random() * matches.length)];
             setSpotlightMatch(randomMatch);
         }
-    }, [matches]);
+        
+        // Load initial tip
+        loadNewTip();
+    }, [user.id]); // Reload if user changes
+
+    const loadNewTip = async () => {
+        setLoadingTip(true);
+        const tip = await getPersonalizedTip(user);
+        setCurrentTip(tip);
+        setLoadingTip(false);
+    };
 
     // Use Real History if available, otherwise fallback
     const myHistory = user.activityHistory || [];
@@ -54,6 +55,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, matches, onOpenLogMo
         if (hour < 12) return "Guten Morgen";
         if (hour < 18) return "Guten Tag";
         return "Guten Abend";
+    };
+
+    // Helper to get names of tagged friends
+    const getTaggedNames = (friendIds?: string[]) => {
+        if (!friendIds || friendIds.length === 0) return null;
+        return friendIds.map(id => {
+            const friend = allUsers.find(u => u.id === id);
+            return friend ? friend.name.split(' ')[0] : 'Unbekannt';
+        }).join(', ');
     };
 
     return (
@@ -75,22 +85,35 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, matches, onOpenLogMo
                 </div>
             </div>
 
-            {/* AI TIP OF THE HOUR */}
+            {/* AI TIP OF THE HOUR (Dynamic) */}
             <div className="bg-gradient-to-r from-indigo-900 to-purple-900 rounded-2xl p-6 border border-purple-700/50 shadow-lg relative overflow-hidden group">
                 <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
                     <Zap size={120} />
                 </div>
                 <div className="relative z-10">
-                    <div className="flex items-center gap-2 mb-3">
-                        <span className="bg-purple-500/20 text-purple-200 text-xs font-bold px-2 py-1 rounded uppercase tracking-wider flex items-center gap-1">
-                            <Clock size={12} /> Stündlicher Tipp
-                        </span>
-                        <span className="text-gray-400 text-xs uppercase tracking-wider">• {currentTip.category}</span>
+                    <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                            <span className="bg-purple-500/20 text-purple-200 text-xs font-bold px-2 py-1 rounded uppercase tracking-wider flex items-center gap-1">
+                                <Clock size={12} /> Daily Coach
+                            </span>
+                            <span className="text-gray-400 text-xs uppercase tracking-wider">• {currentTip?.category || 'Loading...'}</span>
+                        </div>
+                        <button onClick={loadNewTip} disabled={loadingTip} className="text-purple-300 hover:text-white transition-colors">
+                            <RefreshCw size={14} className={loadingTip ? "animate-spin" : ""} />
+                        </button>
                     </div>
-                    <h3 className="text-xl font-bold text-white mb-2">{currentTip.title}</h3>
-                    <p className="text-purple-100 max-w-xl leading-relaxed">
-                        "{currentTip.text}"
-                    </p>
+                    {currentTip ? (
+                        <>
+                            <h3 className="text-xl font-bold text-white mb-2">{currentTip.title}</h3>
+                            <p className="text-purple-100 max-w-xl leading-relaxed">
+                                "{currentTip.text}"
+                            </p>
+                        </>
+                    ) : (
+                        <div className="h-16 flex items-center text-purple-200">
+                            Analysiere dein Profil für den perfekten Tipp...
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -111,7 +134,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, matches, onOpenLogMo
                                 <ArrowRight className="text-gray-600 group-hover:text-blue-400" size={18} />
                             </div>
                             <h3 className="font-bold text-white">Workout Loggen</h3>
-                            <p className="text-xs text-gray-400 mt-1">Tracke deine Aktivität für heute</p>
+                            <p className="text-xs text-gray-400 mt-1">Tracke deine Aktivität</p>
                         </div>
 
                         <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-md">
@@ -121,7 +144,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, matches, onOpenLogMo
                                 </div>
                             </div>
                             <h3 className="font-bold text-white">{user.level}</h3>
-                            <p className="text-xs text-gray-400 mt-1">Aktuelles Level</p>
+                            <p className="text-xs text-gray-400 mt-1">Ziel: {user.frequency}x / Woche</p>
                         </div>
                     </div>
 
@@ -133,7 +156,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, matches, onOpenLogMo
                                     <Users size={18} className="text-blue-400" /> 
                                     Vorschlag für dich
                                 </h3>
-                                <span className="text-xs text-gray-500 bg-gray-900 px-2 py-1 rounded">98% Match</span>
+                                <span className="text-xs text-gray-500 bg-gray-900 px-2 py-1 rounded">95% Match</span>
                             </div>
                             
                             <div className="flex items-center gap-4">
@@ -179,6 +202,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, matches, onOpenLogMo
                                             <p className="text-xs text-gray-400">
                                                 {activity.duration} Min • {new Date(activity.date).toLocaleDateString()}
                                             </p>
+                                            {activity.taggedUserIds && activity.taggedUserIds.length > 0 && (
+                                                <p className="text-xs text-blue-400 flex items-center gap-1 mt-1">
+                                                    <Users size={10} /> 
+                                                    mit {getTaggedNames(activity.taggedUserIds)}
+                                                </p>
+                                            )}
                                         </div>
                                     </div>
                                 ))}
@@ -191,10 +220,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, matches, onOpenLogMo
                         )}
                         
                         <div className="mt-6 pt-4 border-t border-gray-700">
-                             <h4 className="text-xs font-bold text-gray-500 uppercase mb-2">Community Pulse</h4>
-                             <div className="text-xs text-gray-400 space-y-2">
-                                 <p>Sarah hat gerade <span className="text-white">Hyrox Training</span> beendet.</p>
-                                 <p>Tom sucht einen <span className="text-white">Laufpartner</span> in München.</p>
+                             <h4 className="text-xs font-bold text-gray-500 uppercase mb-2">Social Stats</h4>
+                             <div className="flex gap-4">
+                                 <div className="text-center">
+                                     <span className="block text-xl font-bold text-white">{user.friends?.length || 0}</span>
+                                     <span className="text-xs text-gray-500">Freunde</span>
+                                 </div>
+                                 <div className="text-center">
+                                     <span className="block text-xl font-bold text-white">{myHistory.length}</span>
+                                     <span className="text-xs text-gray-500">Workouts</span>
+                                 </div>
                              </div>
                         </div>
                     </div>

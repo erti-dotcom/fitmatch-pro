@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { UserProfile, MatchRecommendation } from "../types";
+import { UserProfile, MatchRecommendation, DailyTip } from "../types";
 
 // Initialize the API client safely
 const apiKey = process.env.API_KEY || '';
@@ -69,4 +69,60 @@ export const getTrainingPlan = async (user: UserProfile, goal: string): Promise<
     } catch (e) {
         return "Fehler bei der Planerstellung.";
     }
-}
+};
+
+export const getPersonalizedTip = async (user: UserProfile): Promise<DailyTip> => {
+    if (!apiKey) {
+        return {
+            title: "Willkommen",
+            text: "Konfiguriere deinen API Key für personalisierte Tipps.",
+            category: "General"
+        };
+    }
+
+    const hour = new Date().getHours();
+    const timeOfDay = hour < 10 ? "Morgen" : hour < 18 ? "Tag" : "Abend";
+
+    const prompt = `
+        Du bist ein Elite Sport Coach.
+        Gib mir einen EINEN kurzen, knackigen Tipp für folgenden Athleten:
+        Name: ${user.name}
+        Level: ${user.level}
+        Sportarten: ${user.sports.join(', ')}
+        Training pro Woche: ${user.frequency}x
+        Aktuelle Uhrzeit: ${timeOfDay}
+
+        Der Tipp soll motivierend oder wissenschaftlich fundiert sein.
+        Antworte im JSON Format.
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-3-flash-preview",
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        title: { type: Type.STRING },
+                        text: { type: Type.STRING },
+                        category: { type: Type.STRING, description: "Kategorie wie Nutrition, Recovery, Mindset, Training" }
+                    },
+                    required: ["title", "text", "category"]
+                }
+            }
+        });
+
+        if (response.text) {
+            return JSON.parse(response.text) as DailyTip;
+        }
+        throw new Error("Empty response");
+    } catch (error) {
+        return {
+            title: "Fokus halten",
+            text: "Konsistenz ist der Schlüssel zum Erfolg. Bleib dran!",
+            category: "Mindset"
+        };
+    }
+};

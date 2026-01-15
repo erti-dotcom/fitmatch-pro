@@ -1,16 +1,17 @@
 import React, { useState } from 'react';
 import { UserProfile, MatchRecommendation } from '../types';
 import { getMatchAnalysis } from '../services/geminiService';
-import { Heart, MessageCircle, Zap } from 'lucide-react';
+import { Heart, MessageCircle, Zap, UserPlus, UserCheck } from 'lucide-react';
 
 interface MatchCardProps {
   currentUser: UserProfile;
   candidate: UserProfile;
-  onConnect: (id: string) => void;
+  isFriend: boolean;
+  onToggleFriend: (id: string) => void;
   onChat: (id: string) => void;
 }
 
-export const MatchCard: React.FC<MatchCardProps> = ({ currentUser, candidate, onConnect, onChat }) => {
+export const MatchCard: React.FC<MatchCardProps> = ({ currentUser, candidate, isFriend, onToggleFriend, onChat }) => {
   const [analysis, setAnalysis] = useState<MatchRecommendation | null>(null);
   const [loadingAi, setLoadingAi] = useState(false);
 
@@ -22,8 +23,8 @@ export const MatchCard: React.FC<MatchCardProps> = ({ currentUser, candidate, on
   };
 
   return (
-    <div className="bg-gray-800 rounded-2xl overflow-hidden shadow-lg border border-gray-700 hover:border-blue-500 transition-all duration-300">
-      <div className="h-48 bg-gray-700 relative">
+    <div className="bg-gray-800 rounded-2xl overflow-hidden shadow-lg border border-gray-700 hover:border-blue-500 transition-all duration-300 flex flex-col h-full">
+      <div className="h-48 bg-gray-700 relative shrink-0">
         <img 
           src={candidate.avatar} 
           alt={candidate.name} 
@@ -35,7 +36,7 @@ export const MatchCard: React.FC<MatchCardProps> = ({ currentUser, candidate, on
         </div>
       </div>
       
-      <div className="p-4 space-y-4">
+      <div className="p-4 space-y-4 flex-1 flex flex-col">
         <div className="flex flex-wrap gap-2">
           {candidate.sports.map(sport => (
             <span key={sport} className="bg-blue-900 text-blue-200 px-2 py-1 rounded-full text-xs font-semibold uppercase tracking-wide">
@@ -47,7 +48,7 @@ export const MatchCard: React.FC<MatchCardProps> = ({ currentUser, candidate, on
           </span>
         </div>
 
-        <p className="text-gray-300 text-sm italic">"{candidate.bio}"</p>
+        <p className="text-gray-300 text-sm italic flex-1">"{candidate.bio}"</p>
         
         {analysis ? (
           <div className="bg-gray-700/50 p-3 rounded-lg border border-green-500/30 animate-in fade-in duration-500">
@@ -73,11 +74,11 @@ export const MatchCard: React.FC<MatchCardProps> = ({ currentUser, candidate, on
 
         <div className="grid grid-cols-2 gap-3 mt-4">
             <button 
-                onClick={() => onConnect(candidate.id)}
-                className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg font-medium transition-colors"
+                onClick={() => onToggleFriend(candidate.id)}
+                className={`flex items-center justify-center gap-2 py-2 rounded-lg font-medium transition-colors ${isFriend ? 'bg-green-600 hover:bg-green-700 text-white' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
             >
-                <Heart size={18} />
-                Match
+                {isFriend ? <UserCheck size={18} /> : <UserPlus size={18} />}
+                {isFriend ? 'Gefolgt' : 'Folgen'}
             </button>
             <button 
                 onClick={() => onChat(candidate.id)}

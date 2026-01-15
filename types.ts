@@ -22,6 +22,7 @@ export interface ActivityLog {
   duration: number; // in minutes
   date: string; // ISO string
   notes?: string;
+  taggedUserIds?: string[]; // IDs of friends tagged in this workout
 }
 
 export interface UserProfile {
@@ -35,10 +36,11 @@ export interface UserProfile {
   level: SkillLevel;
   frequency: number;
   avatar: string;
-  // New Local Stats
+  // New Local Stats & Social
   streak?: number;
   lastWorkout?: string;
   activityHistory?: ActivityLog[];
+  friends?: string[]; // List of User IDs allowed to be tagged
 }
 
 export interface ChatMessage {
@@ -52,4 +54,10 @@ export interface MatchRecommendation {
   score: number;
   reasoning: string;
   suggestedActivity: string;
+}
+
+export interface DailyTip {
+    title: string;
+    text: string;
+    category: string;
 }
