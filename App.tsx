@@ -7,7 +7,6 @@ import { Dashboard } from './components/Dashboard';
 import { AuthScreen } from './components/AuthScreen';
 import { getTrainingPlan } from './services/geminiService';
 import { 
-  Dumbbell, 
   Users, 
   MessageSquare, 
   UserCircle, 
@@ -15,10 +14,12 @@ import {
   Search,
   Send,
   Sparkles,
-  LogOut
+  LogOut,
+  Camera,
+  Filter
 } from 'lucide-react';
 
-// Simple Navigation Tabs
+// Navigation Tabs
 enum Tab {
   DASHBOARD = 'dashboard',
   MATCHES = 'matches',
@@ -28,31 +29,38 @@ enum Tab {
 }
 
 const App = () => {
-  // State
+  // --- STATE MANAGEMENT ---
   const [activeTab, setActiveTab] = useState<Tab>(Tab.MATCHES);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   
-  // Data State
+  // Data
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_CHAT_MESSAGES);
   const [selectedChatPartner, setSelectedChatPartner] = useState<string | null>(null);
   
-  // Forms State
+  // Search & Filters
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterSport, setFilterSport] = useState<SportType | 'ALL'>('ALL');
+  
+  // Form Inputs (Profile Editing)
   const [nameInput, setNameInput] = useState('');
   const [ageInput, setAgeInput] = useState('25');
   const [locationInput, setLocationInput] = useState('');
   const [selectedSports, setSelectedSports] = useState<SportType[]>([]);
   const [bioInput, setBioInput] = useState('');
+  const [avatarUrl, setAvatarUrl] = useState('');
+  
+  // Chat Input
   const [chatInput, setChatInput] = useState('');
   
-  // AI Coach State
+  // AI Coach
   const [coachGoal, setCoachGoal] = useState('');
   const [coachPlan, setCoachPlan] = useState('');
   const [coachLoading, setCoachLoading] = useState(false);
 
-  // Initialize Auth & Fetch Users
+  // --- INITIAL LOAD ---
   useEffect(() => {
     const checkSession = async () => {
       setAuthLoading(true);
@@ -69,11 +77,13 @@ const App = () => {
         if (profile) {
             const userProfile = profile as UserProfile;
             setCurrentUser(userProfile);
+            // Pre-fill form
             setNameInput(userProfile.name);
             setAgeInput(userProfile.age.toString());
             setLocationInput(userProfile.location || '');
             setBioInput(userProfile.bio || '');
             setSelectedSports(userProfile.sports || []);
+            setAvatarUrl(userProfile.avatar);
             setActiveTab(Tab.DASHBOARD);
         }
       }
@@ -82,19 +92,17 @@ const App = () => {
 
     checkSession();
 
-    // Load other users from DB (real data)
+    // Fetch other users for matching
     const fetchUsers = async () => {
         const { data: profiles } = await supabase
             .from('profiles')
             .select('*');
         
         if (profiles) {
-            // Filter out current user locally for now
-            // Merge with MOCK_USERS if needed, but lets prefer real data + mocks as fallback for demo
             if (profiles.length > 1) {
                 setUsers(profiles as UserProfile[]);
             } else {
-                setUsers(MOCK_USERS); // Keep mocks if DB is empty so app looks good
+                setUsers(MOCK_USERS);
             }
         }
     };
@@ -102,17 +110,18 @@ const App = () => {
 
   }, []);
 
-  // Auth Handlers
+  // --- HANDLERS ---
+
   const handleLogin = (user: UserProfile) => {
     setCurrentUser(user);
-    // Initialize form inputs
     setNameInput(user.name);
     setAgeInput(user.age.toString());
     setLocationInput(user.location || '');
     setBioInput(user.bio || '');
     setSelectedSports(user.sports || []);
+    setAvatarUrl(user.avatar);
     
-    // Check if profile is incomplete
+    // Force edit if profile is empty
     if (!user.sports || user.sports.length === 0) {
         setIsEditingProfile(true);
     } else {
@@ -127,7 +136,44 @@ const App = () => {
       setIsEditingProfile(false);
   };
 
-  // Profile Handlers
+  // 1. AVATAR UPLOAD
+  const handleAvatarUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    try {
+      if (!event.target.files || event.target.files.length === 0) {
+        return;
+      }
+      const file = event.target.files[0];
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Math.random()}.${fileExt}`;
+      const filePath = `${fileName}`;
+
+      // Upload to Supabase Storage 'avatars' bucket
+      const { error: uploadError } = await supabase.storage
+        .from('avatars')
+        .upload(filePath, file);
+
+      if (uploadError) {
+        console.warn("Upload Error (Bucket might be missing):", uploadError);
+        // Fallback: Local Preview if Supabase Storage is not configured
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            if(e.target?.result) setAvatarUrl(e.target.result as string);
+        };
+        reader.readAsDataURL(file);
+        return;
+      }
+
+      // Get Public URL
+      const { data } = supabase.storage.from('avatars').getPublicUrl(filePath);
+      if (data) {
+          setAvatarUrl(data.publicUrl);
+      }
+    } catch (error) {
+      alert('Fehler beim Upload!');
+    }
+  };
+
+  // 2. SAVE PROFILE
   const handleSaveProfile = async () => {
     if (!currentUser) return;
 
@@ -138,12 +184,12 @@ const App = () => {
       location: locationInput,
       bio: bioInput,
       sports: selectedSports,
-      level: SkillLevel.INTERMEDIATE,
-      frequency: 3,
-      avatar: currentUser.avatar 
+      // Default values if missing
+      level: currentUser.level || SkillLevel.INTERMEDIATE,
+      frequency: currentUser.frequency || 3,
+      avatar: avatarUrl || currentUser.avatar 
     };
 
-    // Update in Supabase
     const { error } = await supabase
         .from('profiles')
         .update({
@@ -152,12 +198,12 @@ const App = () => {
             location: updatedUser.location,
             bio: updatedUser.bio,
             sports: updatedUser.sports,
-            level: updatedUser.level,
-            frequency: updatedUser.frequency
+            avatar: updatedUser.avatar
         })
         .eq('id', currentUser.id);
 
     if (error) {
+        console.error(error);
         alert('Fehler beim Speichern');
         return;
     }
@@ -206,27 +252,58 @@ const App = () => {
       setCoachLoading(false);
   }
 
+  // 3. FILTER & SEARCH LOGIC
+  const filteredUsers = users.filter(u => {
+      // Don't show myself
+      if (u.id === currentUser?.id) return false;
+      
+      // Search Term (Name or Location)
+      const matchesSearch = 
+        u.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+        u.location.toLowerCase().includes(searchTerm.toLowerCase());
+      
+      // Sport Filter
+      const matchesSport = filterSport === 'ALL' || u.sports.includes(filterSport);
+      
+      return matchesSearch && matchesSport;
+  });
+
+  // --- RENDER ---
+
   if (authLoading) {
       return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">Lade App...</div>;
   }
 
-  // --- Login View ---
   if (!currentUser) {
       return <AuthScreen onLogin={handleLogin} />;
   }
 
-  // --- Profile Edit View ---
+  // --- EDIT PROFILE VIEW ---
   if (isEditingProfile) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
         <div className="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-md border border-gray-700 animate-in fade-in zoom-in duration-300">
-          <div className="flex justify-center mb-6">
-            <div className="bg-blue-600 p-4 rounded-full">
-              <Dumbbell size={32} className="text-white" />
+          
+          <div className="flex justify-center mb-6 relative group">
+            <div className="relative cursor-pointer">
+                <img 
+                    src={avatarUrl || currentUser.avatar} 
+                    alt="Avatar" 
+                    className="w-24 h-24 rounded-full object-cover border-4 border-gray-700 group-hover:border-blue-500 transition-all"
+                />
+                <label className="absolute bottom-0 right-0 bg-blue-600 p-2 rounded-full cursor-pointer hover:bg-blue-500 shadow-lg">
+                    <Camera size={16} className="text-white" />
+                    <input 
+                        type="file" 
+                        className="hidden" 
+                        accept="image/*"
+                        onChange={handleAvatarUpload}
+                    />
+                </label>
             </div>
           </div>
+
           <h1 className="text-3xl font-bold text-center text-white mb-2">Dein Profil</h1>
-          <p className="text-gray-400 text-center mb-8">Erzähl uns mehr über dich.</p>
           
           <div className="space-y-4">
             <div>
@@ -236,7 +313,6 @@ const App = () => {
                 value={nameInput}
                 onChange={(e) => setNameInput(e.target.value)}
                 className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-white focus:border-blue-500 focus:outline-none"
-                placeholder="Dein Name"
               />
             </div>
             
@@ -257,7 +333,6 @@ const App = () => {
                     value={locationInput}
                     onChange={(e) => setLocationInput(e.target.value)}
                     className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-white"
-                    placeholder="z.B. Berlin"
                   />
                 </div>
             </div>
@@ -287,15 +362,14 @@ const App = () => {
                 value={bioInput}
                 onChange={(e) => setBioInput(e.target.value)}
                 className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-white h-24 text-sm"
-                placeholder="Erzähl kurz was über dich und deine Ziele..."
               />
             </div>
 
             <button 
               onClick={handleSaveProfile}
-              className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-3 rounded-lg mt-4 transition-all"
+              className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 text-white font-bold py-3 rounded-lg mt-4"
             >
-              Speichern & Loslegen
+              Speichern
             </button>
             <button 
               onClick={() => setIsEditingProfile(false)}
@@ -309,7 +383,7 @@ const App = () => {
     );
   }
 
-  // Main App Interface
+  // --- MAIN UI ---
   return (
     <div className="min-h-screen bg-gray-900 flex text-gray-100 font-sans">
       
@@ -376,51 +450,80 @@ const App = () => {
 
       {/* Main Content Area */}
       <main className="flex-1 p-4 md:p-8 overflow-y-auto">
-        <header className="flex justify-between items-center mb-8">
+        <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
             <h2 className="text-2xl font-bold text-white capitalize">
                 {activeTab === Tab.MATCHES ? 'Entdecke Sportler' : 
                  activeTab === Tab.DASHBOARD ? 'Dein Dashboard' :
                  activeTab === Tab.CHAT ? 'Nachrichten' :
                  activeTab === Tab.AI_COACH ? 'AI Coach' : 'Profil'}
             </h2>
-            <div className="flex gap-2">
-                 <div className="relative">
-                    <input 
-                        type="text" 
-                        placeholder="Suchen..." 
-                        className="bg-gray-800 border-none rounded-full py-2 pl-10 pr-4 text-sm text-gray-300 focus:ring-2 focus:ring-blue-500 w-48 md:w-64"
-                    />
-                    <Search className="absolute left-3 top-2.5 text-gray-500" size={16} />
-                 </div>
-            </div>
+            
+            {/* SEARCH & FILTER UI */}
+            {activeTab === Tab.MATCHES && (
+                <div className="flex gap-2 w-full md:w-auto">
+                     <div className="relative flex-1 md:flex-initial">
+                        <input 
+                            type="text" 
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            placeholder="Suchen (Name, Ort)..." 
+                            className="bg-gray-800 border border-gray-700 rounded-full py-2 pl-10 pr-4 text-sm text-gray-300 focus:ring-2 focus:ring-blue-500 w-full md:w-64"
+                        />
+                        <Search className="absolute left-3 top-2.5 text-gray-500" size={16} />
+                     </div>
+                     
+                     <div className="relative">
+                        <select 
+                            value={filterSport}
+                            onChange={(e) => setFilterSport(e.target.value as SportType | 'ALL')}
+                            className="bg-gray-800 border border-gray-700 rounded-full py-2 pl-4 pr-8 text-sm text-gray-300 focus:ring-2 focus:ring-blue-500 appearance-none cursor-pointer"
+                        >
+                            <option value="ALL">Alle Sportarten</option>
+                            {Object.values(SportType).map(s => (
+                                <option key={s} value={s}>{s}</option>
+                            ))}
+                        </select>
+                        <Filter className="absolute right-3 top-2.5 text-gray-500 pointer-events-none" size={16} />
+                     </div>
+                </div>
+            )}
         </header>
 
         {activeTab === Tab.DASHBOARD && (
             <Dashboard user={currentUser} matches={users.filter(u => u.id !== currentUser?.id)} />
         )}
 
+        {/* MATCHES LIST */}
         {activeTab === Tab.MATCHES && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in zoom-in duration-300">
-            {users.filter(u => u.id !== currentUser?.id).map(user => (
-              <MatchCard 
-                key={user.id} 
-                currentUser={currentUser}
-                candidate={user} 
-                onConnect={handleConnect}
-                onChat={handleStartChat}
-              />
-            ))}
-            {users.length <= 1 && (
-                <div className="col-span-3 text-center text-gray-400 mt-10">
-                    <p>Noch keine anderen Nutzer gefunden. Lade Freunde ein!</p>
+            {filteredUsers.length > 0 ? (
+                filteredUsers.map(user => (
+                  <MatchCard 
+                    key={user.id} 
+                    currentUser={currentUser}
+                    candidate={user} 
+                    onConnect={handleConnect}
+                    onChat={handleStartChat}
+                  />
+                ))
+            ) : (
+                <div className="col-span-3 flex flex-col items-center justify-center p-12 text-gray-500">
+                    <Search size={48} className="mb-4 opacity-50" />
+                    <p>Keine Sportler gefunden, die deinen Kriterien entsprechen.</p>
+                    <button 
+                        onClick={() => { setSearchTerm(''); setFilterSport('ALL'); }}
+                        className="mt-4 text-blue-400 hover:text-blue-300 text-sm"
+                    >
+                        Filter zurücksetzen
+                    </button>
                 </div>
             )}
           </div>
         )}
 
+        {/* CHAT TAB */}
         {activeTab === Tab.CHAT && (
           <div className="bg-gray-800 rounded-2xl h-[calc(100vh-160px)] flex border border-gray-700 overflow-hidden shadow-2xl">
-             {/* Chat List */}
              <div className="w-1/3 border-r border-gray-700 bg-gray-800/50 flex flex-col">
                  <div className="p-4 border-b border-gray-700 font-bold text-gray-400 text-sm">DEINE CHATS</div>
                  <div className="overflow-y-auto flex-1">
@@ -433,14 +536,13 @@ const App = () => {
                             <img src={u.avatar} className="w-10 h-10 rounded-full object-cover" />
                             <div>
                                 <h4 className="font-bold text-gray-200">{u.name}</h4>
-                                <p className="text-xs text-gray-500 truncate">Klicke um zu chatten</p>
+                                <p className="text-xs text-gray-500 truncate">Nachricht senden...</p>
                             </div>
                         </div>
                     ))}
                  </div>
              </div>
 
-             {/* Chat Window */}
              <div className="flex-1 flex flex-col bg-gray-900/50">
                  {selectedChatPartner ? (
                     <>
@@ -452,10 +554,9 @@ const App = () => {
                          <div className="flex-1 p-4 overflow-y-auto space-y-4">
                             {messages
                                 .filter(m => 
-                                    (m.senderId === currentUser.id && m.senderId === selectedChatPartner) || // Self chat (logic fix needed for real app but ok for mock)
+                                    (m.senderId === currentUser.id && m.senderId === selectedChatPartner) ||
                                     (m.senderId === selectedChatPartner) ||
-                                    (m.senderId === currentUser.id && selectedChatPartner) // Show sent messages? Need recipient field in real app.
-                                    // For this mock, we just show all messages if they look relevant or generic
+                                    (m.senderId === currentUser.id && selectedChatPartner)
                                 ) 
                                 .map(msg => (
                                     <div key={msg.id} className={`flex ${msg.senderId === currentUser.id ? 'justify-end' : 'justify-start'}`}>
@@ -469,16 +570,6 @@ const App = () => {
                                     </div>
                                 ))
                             }
-                            {/* Dummy fix to show sent messages in this simple mock structure without recipientId */}
-                            {messages.filter(m => m.senderId === currentUser.id).length > 0 && selectedChatPartner && (
-                                 messages.filter(m => m.senderId === currentUser.id).map(msg => (
-                                    <div key={msg.id} className="flex justify-end">
-                                        <div className="max-w-[70%] p-3 rounded-2xl text-sm bg-blue-600 text-white rounded-br-none">
-                                            {msg.text}
-                                        </div>
-                                    </div>
-                                 ))
-                            )}
                          </div>
                          <div className="p-4 bg-gray-800 border-t border-gray-700">
                              <div className="flex gap-2">
@@ -506,6 +597,7 @@ const App = () => {
           </div>
         )}
 
+        {/* AI COACH TAB */}
         {activeTab === Tab.AI_COACH && (
             <div className="max-w-2xl mx-auto bg-gray-800 rounded-2xl p-8 border border-gray-700 shadow-xl">
                  <div className="text-center mb-8">
@@ -522,19 +614,15 @@ const App = () => {
                         type="text" 
                         value={coachGoal}
                         onChange={(e) => setCoachGoal(e.target.value)}
-                        placeholder="z.B. Erster Hyrox Wettkampf in 3 Monaten, unter 1:30h" 
+                        placeholder="z.B. Erster Hyrox Wettkampf in 3 Monaten" 
                         className="w-full bg-gray-700 border border-gray-600 rounded-xl p-4 text-white focus:ring-2 focus:ring-purple-500 focus:outline-none"
                      />
                      <button 
                         onClick={handleGeneratePlan}
                         disabled={coachLoading || !coachGoal}
-                        className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-bold py-3 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
+                        className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 text-white font-bold py-3 rounded-xl transition-all disabled:opacity-50 flex justify-center items-center gap-2"
                      >
-                         {coachLoading ? (
-                             <Activity className="animate-spin" /> 
-                         ) : (
-                             <>Trainingsplan Generieren <Sparkles size={16}/></>
-                         )}
+                         {coachLoading ? <Activity className="animate-spin" /> : <>Trainingsplan Generieren <Sparkles size={16}/></>}
                      </button>
                  </div>
 
@@ -554,7 +642,7 @@ const App = () => {
   );
 };
 
-// Helper Subcomponent for Navigation
+// Subcomponent for Navigation
 const NavButton = ({ active, onClick, icon, label }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string }) => (
     <button 
         onClick={onClick}
